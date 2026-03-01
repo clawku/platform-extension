@@ -1,0 +1,146 @@
+import { wsConnection } from './websocket.js';
+import { pair, disconnect, getStatus, getStoredCredentials } from './auth.js';
+import { executeCommand, createResultPayload } from './browser-commands.js';
+import type { BrowserJobMessage, PopupMessage } from '../types/messages.js';
+
+console.log('[ServiceWorker] Starting Clawku Browser Extension');
+
+// Handle incoming browser jobs from WebSocket
+wsConnection.setMessageHandler(async (message: BrowserJobMessage) => {
+  const { jobId, action, params, nonce, expiresAt } = message.payload;
+
+  console.log('[ServiceWorker] Received job:', jobId, action);
+
+  // Check if job has expired
+  if (Date.now() > expiresAt) {
+    console.log('[ServiceWorker] Job expired:', jobId);
+    const result = createResultPayload(jobId, nonce, {
+      success: false,
+      error: 'Job expired',
+    });
+    wsConnection.sendResult(result);
+    return;
+  }
+
+  // Execute the command
+  const commandResult = await executeCommand(action, params);
+
+  // Send result back
+  const result = createResultPayload(jobId, nonce, commandResult);
+  wsConnection.sendResult(result);
+
+  // Update badge to show activity
+  showActivityBadge();
+});
+
+// Show brief activity indicator
+function showActivityBadge() {
+  chrome.action.setBadgeText({ text: '...' });
+  chrome.action.setBadgeBackgroundColor({ color: '#3b82f6' }); // Blue
+
+  setTimeout(() => {
+    // Restore connected status
+    if (wsConnection.isConnected()) {
+      chrome.action.setBadgeText({ text: 'ON' });
+      chrome.action.setBadgeBackgroundColor({ color: '#22c55e' }); // Green
+    } else {
+      chrome.action.setBadgeText({ text: '' });
+    }
+  }, 500);
+}
+
+// Handle messages from popup
+chrome.runtime.onMessage.addListener((message: PopupMessage, sender, sendResponse) => {
+  console.log('[ServiceWorker] Popup message:', message.type);
+
+  (async () => {
+    switch (message.type) {
+      case 'GET_STATUS': {
+        const status = await getStatus();
+        status.connected = wsConnection.isConnected();
+        sendResponse(status);
+        break;
+      }
+
+      case 'PAIR': {
+        if (!message.payload?.code) {
+          sendResponse({ success: false, error: 'No code provided' });
+          return;
+        }
+
+        const result = await pair(
+          message.payload.code,
+          message.payload.apiBaseUrl
+        );
+
+        if (result.success) {
+          // Connect WebSocket after pairing
+          await wsConnection.connect();
+          await chrome.storage.local.set({ wsConnected: wsConnection.isConnected() });
+        }
+
+        sendResponse(result);
+        break;
+      }
+
+      case 'DISCONNECT': {
+        wsConnection.disconnect();
+        await disconnect();
+        await chrome.storage.local.set({ wsConnected: false });
+        sendResponse({ success: true });
+        break;
+      }
+
+      case 'RECONNECT': {
+        const creds = await getStoredCredentials();
+        if (!creds) {
+          sendResponse({ success: false, error: 'Not paired' });
+          return;
+        }
+
+        const connected = await wsConnection.connect();
+        await chrome.storage.local.set({ wsConnected: connected });
+        sendResponse({ success: connected });
+        break;
+      }
+
+      default:
+        sendResponse({ success: false, error: 'Unknown message type' });
+    }
+  })();
+
+  return true; // Keep channel open for async response
+});
+
+// Auto-connect on startup if paired
+chrome.runtime.onStartup.addListener(async () => {
+  console.log('[ServiceWorker] Browser startup - checking credentials');
+  const creds = await getStoredCredentials();
+  if (creds) {
+    console.log('[ServiceWorker] Found credentials, connecting...');
+    const connected = await wsConnection.connect();
+    await chrome.storage.local.set({ wsConnected: connected });
+  }
+});
+
+// Also try to connect when service worker activates
+(async () => {
+  const creds = await getStoredCredentials();
+  if (creds) {
+    console.log('[ServiceWorker] Credentials found on activate, connecting...');
+    const connected = await wsConnection.connect();
+    await chrome.storage.local.set({ wsConnected: connected });
+  }
+})();
+
+// Handle extension install/update
+chrome.runtime.onInstalled.addListener((details) => {
+  console.log('[ServiceWorker] Extension installed/updated:', details.reason);
+
+  if (details.reason === 'install') {
+    // Show welcome page or instructions
+    chrome.tabs.create({
+      url: 'https://app.clawku.ai/extension-setup',
+    });
+  }
+});

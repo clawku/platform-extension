@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clawku Browser Agent</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Clawku</h1>
+      <span class="subtitle">Browser Agent</span>
+    </header>
+
+    <!-- Not Paired State -->
+    <div id="state-unpaired" class="state">
+      <p class="description">Connect your browser to your Clawku AI agent</p>
+
+      <div class="input-group">
+        <label for="pairing-code">Pairing Code</label>
+        <input
+          type="text"
+          id="pairing-code"
+          placeholder="Enter 6-digit code"
+          maxlength="6"
+          autocomplete="off"
+        >
+      </div>
+
+      <div class="input-group">
+        <label for="api-url">API URL (optional)</label>
+        <input
+          type="text"
+          id="api-url"
+          placeholder="https://api.clawku.ai"
+          value=""
+        >
+      </div>
+
+      <button id="btn-pair" class="btn-primary">
+        Connect
+      </button>
+
+      <p class="help-text">
+        Get your pairing code from<br>
+        <a href="https://app.clawku.ai/settings/browser" target="_blank">
+          Clawku Dashboard → Browser Extension
+        </a>
+      </p>
+    </div>
+
+    <!-- Paired & Connected State -->
+    <div id="state-connected" class="state hidden">
+      <div class="status-card connected">
+        <div class="status-indicator"></div>
+        <div class="status-info">
+          <span class="status-label">Connected</span>
+          <span id="persona-name" class="persona-name">-</span>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="btn-test" class="btn-secondary">
+          Test Connection
+        </button>
+        <button id="btn-disconnect" class="btn-danger">
+          Disconnect
+        </button>
+      </div>
+
+      <div id="activity-log" class="activity-log hidden">
+        <h3>Recent Activity</h3>
+        <ul id="activity-list"></ul>
+      </div>
+    </div>
+
+    <!-- Paired but Disconnected State -->
+    <div id="state-disconnected" class="state hidden">
+      <div class="status-card disconnected">
+        <div class="status-indicator"></div>
+        <div class="status-info">
+          <span class="status-label">Reconnecting...</span>
+          <span id="persona-name-disconnected" class="persona-name">-</span>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="btn-reconnect" class="btn-primary">
+          Reconnect Now
+        </button>
+        <button id="btn-disconnect-2" class="btn-danger">
+          Disconnect
+        </button>
+      </div>
+    </div>
+
+    <!-- Error State -->
+    <div id="state-error" class="state hidden">
+      <div class="error-message">
+        <span id="error-text">An error occurred</span>
+      </div>
+      <button id="btn-retry" class="btn-primary">
+        Retry
+      </button>
+    </div>
+
+    <!-- Loading State -->
+    <div id="state-loading" class="state">
+      <div class="loading-spinner"></div>
+      <p>Loading...</p>
+    </div>
+  </div>
+
+  <script src="popup.js" type="module"></script>
+</body>
+</html>
