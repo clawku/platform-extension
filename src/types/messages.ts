@@ -1,5 +1,6 @@
 // WebSocket message types between platform-api and extension
 
+// OpenClaw browser tool actions (compatible with browser-tool.ts)
 export type BrowserAction =
   | 'status'
   | 'tabs'
@@ -9,13 +10,38 @@ export type BrowserAction =
   | 'navigate'
   | 'screenshot'
   | 'snapshot'
+  | 'console'
+  // OpenClaw uses 'act' wrapper for all interactions
+  | 'act'
+  // Direct actions (legacy support)
   | 'click'
   | 'type'
   | 'press'
   | 'hover'
   | 'scroll'
   | 'select'
-  | 'console';
+  // Unsupported actions (return helpful errors)
+  | 'start'
+  | 'stop'
+  | 'profiles'
+  | 'pdf'
+  | 'upload'
+  | 'dialog';
+
+// OpenClaw act kinds (from browser-tool.schema.ts)
+export type BrowserActKind =
+  | 'click'
+  | 'type'
+  | 'press'
+  | 'hover'
+  | 'drag'
+  | 'select'
+  | 'fill'
+  | 'resize'
+  | 'wait'
+  | 'evaluate'
+  | 'close'
+  | 'scroll';
 
 export interface BrowserJobPayload {
   jobId: string;
@@ -26,6 +52,46 @@ export interface BrowserJobPayload {
   expiresAt: number;
 }
 
+// OpenClaw act request object (nested form)
+export interface BrowserActRequest {
+  kind: BrowserActKind;
+  targetId?: string;
+  ref?: string;
+  // click
+  doubleClick?: boolean;
+  button?: string;
+  modifiers?: string[];
+  // type
+  text?: string;
+  submit?: boolean;
+  slowly?: boolean;
+  // press
+  key?: string;
+  delayMs?: number;
+  // drag
+  startRef?: string;
+  endRef?: string;
+  // select
+  values?: string[];
+  // fill
+  fields?: Array<Record<string, unknown>>;
+  // resize
+  width?: number;
+  height?: number;
+  // wait
+  timeMs?: number;
+  selector?: string;
+  url?: string;
+  loadState?: string;
+  textGone?: string;
+  timeoutMs?: number;
+  // evaluate
+  fn?: string;
+  // scroll
+  direction?: 'up' | 'down' | 'left' | 'right';
+  amount?: number;
+}
+
 export interface BrowserActionParams {
   // Common
   targetId?: number; // Tab ID
@@ -33,6 +99,7 @@ export interface BrowserActionParams {
 
   // open/navigate
   url?: string;
+  targetUrl?: string; // OpenClaw uses targetUrl for open/navigate
 
   // click
   button?: 'left' | 'right' | 'middle';
@@ -46,6 +113,7 @@ export interface BrowserActionParams {
 
   // press
   key?: string;
+  delayMs?: number;
 
   // scroll
   direction?: 'up' | 'down' | 'left' | 'right';
@@ -58,13 +126,47 @@ export interface BrowserActionParams {
   fullPage?: boolean;
   format?: 'png' | 'jpeg';
   quality?: number;
+  element?: string; // CSS selector for element screenshot
 
   // snapshot
   snapshotFormat?: 'ai' | 'aria';
   maxChars?: number;
+  limit?: number;
+  mode?: 'efficient';
+  refs?: 'role' | 'aria';
+  interactive?: boolean;
+  compact?: boolean;
+  depth?: number;
+  selector?: string;
+  frame?: string;
+  labels?: boolean;
 
   // console
   level?: 'log' | 'warn' | 'error' | 'all';
+
+  // act - OpenClaw wraps interactions in 'act' action
+  kind?: BrowserActKind; // Flattened form: action=act, kind=click, ref=e12
+  request?: BrowserActRequest; // Nested form: action=act, request={kind: 'click', ref: 'e12'}
+
+  // wait
+  timeMs?: number;
+  loadState?: string;
+  textGone?: string;
+  timeoutMs?: number;
+
+  // drag
+  startRef?: string;
+  endRef?: string;
+
+  // fill
+  fields?: Array<Record<string, unknown>>;
+
+  // resize
+  width?: number;
+  height?: number;
+
+  // evaluate
+  fn?: string;
 }
 
 export interface BrowserResultPayload {

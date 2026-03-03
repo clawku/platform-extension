@@ -1,41 +1,103 @@
+/* ==========================================================================
+   CLAWKU BROWSER EXTENSION — Crab & Cloud Design System
+   ========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+
 * {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
 }
 
+:root {
+  /* Brand Colors */
+  --color-primary: #f45d5d;
+  --color-primary-hover: #e84a4a;
+  --color-primary-light: #ff8a8a;
+  --color-primary-muted: rgba(244, 93, 93, 0.12);
+
+  --color-secondary: #00d4aa;
+  --color-secondary-hover: #00c49b;
+  --color-secondary-light: #5eecd5;
+  --color-secondary-muted: rgba(0, 212, 170, 0.12);
+
+  --color-navy: #1e2a4a;
+  --color-navy-light: #2d3f5f;
+  --color-text-muted: #5a6b7e;
+
+  --color-cloud: #ffffff;
+  --color-cloud-soft: #f8fafb;
+  --color-cloud-mist: #f0f4f7;
+  --color-cloud-fog: #e4eaf0;
+
+  --color-success: #10b981;
+  --color-success-light: rgba(16, 185, 129, 0.12);
+  --color-error: #ef4444;
+  --color-error-light: rgba(239, 68, 68, 0.12);
+  --color-warning: #f59e0b;
+  --color-warning-light: rgba(245, 158, 11, 0.12);
+
+  --color-border: rgba(30, 42, 74, 0.08);
+  --color-border-hover: rgba(30, 42, 74, 0.15);
+
+  --gradient-brand: linear-gradient(135deg, var(--color-primary) 0%, var(--color-secondary) 100%);
+
+  --font-display: 'Nunito', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-body: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+
+  --shadow-sm: 0 2px 8px rgba(30, 42, 74, 0.06);
+  --shadow-md: 0 4px 16px rgba(30, 42, 74, 0.08);
+  --shadow-primary: 0 4px 20px rgba(244, 93, 93, 0.25);
+}
+
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  font-family: var(--font-body);
   font-size: 14px;
   line-height: 1.5;
-  color: #1f2937;
-  background: #ffffff;
+  color: var(--color-navy);
+  background: var(--color-cloud-soft);
   min-width: 320px;
+  -webkit-font-smoothing: antialiased;
 }
 
 .container {
   padding: 20px;
 }
 
+/* Header with Logo */
 header {
   text-align: center;
   margin-bottom: 20px;
 }
 
+header .logo {
+  width: 48px;
+  height: 48px;
+  margin-bottom: 8px;
+}
+
 header h1 {
-  font-size: 24px;
-  font-weight: 700;
-  color: #111827;
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--color-navy);
   margin-bottom: 2px;
 }
 
 header .subtitle {
-  font-size: 12px;
-  color: #6b7280;
+  font-size: 11px;
+  color: var(--color-text-muted);
   text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: 1.5px;
+  font-weight: 600;
 }
 
+/* States */
 .state {
   display: flex;
   flex-direction: column;
@@ -48,10 +110,12 @@ header .subtitle {
 
 .description {
   text-align: center;
-  color: #6b7280;
+  color: var(--color-text-muted);
   margin-bottom: 8px;
+  font-size: 13px;
 }
 
+/* Input Group */
 .input-group {
   display: flex;
   flex-direction: column;
@@ -60,36 +124,41 @@ header .subtitle {
 
 .input-group label {
   font-size: 12px;
-  font-weight: 500;
-  color: #374151;
+  font-weight: 600;
+  color: var(--color-navy);
 }
 
 .input-group input {
   padding: 10px 12px;
-  border: 1px solid #d1d5db;
-  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-body);
   font-size: 14px;
+  background: var(--color-cloud);
+  color: var(--color-navy);
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .input-group input:focus {
   outline: none;
-  border-color: #6366f1;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-muted);
 }
 
 .input-group input::placeholder {
-  color: #9ca3af;
+  color: var(--color-text-muted);
 }
 
+/* Buttons */
 button {
   padding: 12px 16px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-body);
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  transition: background-color 0.2s, transform 0.1s;
+  transition: all 0.2s ease;
 }
 
 button:hover {
@@ -101,42 +170,48 @@ button:active {
 }
 
 .btn-primary {
-  background: #6366f1;
+  background: var(--color-primary);
   color: white;
+  box-shadow: var(--shadow-primary);
 }
 
 .btn-primary:hover {
-  background: #4f46e5;
+  background: var(--color-primary-hover);
 }
 
 .btn-secondary {
-  background: #f3f4f6;
-  color: #374151;
+  background: var(--color-cloud);
+  color: var(--color-navy);
+  border: 1px solid var(--color-border);
 }
 
 .btn-secondary:hover {
-  background: #e5e7eb;
+  background: var(--color-cloud-mist);
+  border-color: var(--color-border-hover);
 }
 
 .btn-danger {
-  background: #fef2f2;
-  color: #dc2626;
+  background: var(--color-error-light);
+  color: var(--color-error);
+  border: 1px solid rgba(239, 68, 68, 0.2);
 }
 
 .btn-danger:hover {
-  background: #fee2e2;
+  background: rgba(239, 68, 68, 0.18);
 }
 
+/* Help Text */
 .help-text {
   text-align: center;
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--color-text-muted);
   margin-top: 8px;
 }
 
 .help-text a {
-  color: #6366f1;
+  color: var(--color-primary);
   text-decoration: none;
+  font-weight: 600;
 }
 
 .help-text a:hover {
@@ -149,16 +224,20 @@ button:active {
   align-items: center;
   gap: 12px;
   padding: 16px;
-  border-radius: 12px;
-  background: #f9fafb;
+  border-radius: var(--radius-md);
+  background: var(--color-cloud);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-sm);
 }
 
 .status-card.connected {
-  background: #ecfdf5;
+  background: var(--color-success-light);
+  border-color: rgba(16, 185, 129, 0.2);
 }
 
 .status-card.disconnected {
-  background: #fffbeb;
+  background: var(--color-warning-light);
+  border-color: rgba(245, 158, 11, 0.2);
 }
 
 .status-indicator {
@@ -169,12 +248,12 @@ button:active {
 }
 
 .connected .status-indicator {
-  background: #22c55e;
-  box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+  background: var(--color-success);
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
 }
 
 .disconnected .status-indicator {
-  background: #f59e0b;
+  background: var(--color-warning);
   animation: pulse 2s infinite;
 }
 
@@ -189,15 +268,18 @@ button:active {
 }
 
 .status-label {
-  font-size: 12px;
-  font-weight: 500;
-  color: #6b7280;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .persona-name {
+  font-family: var(--font-display);
   font-size: 16px;
-  font-weight: 600;
-  color: #111827;
+  font-weight: 700;
+  color: var(--color-navy);
 }
 
 /* Actions */
@@ -214,26 +296,29 @@ button:active {
 .activity-log {
   margin-top: 8px;
   padding: 12px;
-  background: #f9fafb;
-  border-radius: 8px;
+  background: var(--color-cloud);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
 }
 
 .activity-log h3 {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
-  color: #6b7280;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
   margin-bottom: 8px;
 }
 
 .activity-log ul {
   list-style: none;
   font-size: 12px;
-  color: #4b5563;
+  color: var(--color-navy);
 }
 
 .activity-log li {
-  padding: 4px 0;
-  border-bottom: 1px solid #e5e7eb;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--color-border);
 }
 
 .activity-log li:last-child {
@@ -243,18 +328,20 @@ button:active {
 /* Error */
 .error-message {
   padding: 16px;
-  background: #fef2f2;
-  border-radius: 8px;
-  color: #dc2626;
+  background: var(--color-error-light);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: var(--radius-sm);
+  color: var(--color-error);
   text-align: center;
+  font-weight: 500;
 }
 
 /* Loading */
 .loading-spinner {
   width: 32px;
   height: 32px;
-  border: 3px solid #e5e7eb;
-  border-top-color: #6366f1;
+  border: 3px solid var(--color-cloud-fog);
+  border-top-color: var(--color-primary);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
   margin: 0 auto;
@@ -271,5 +358,6 @@ button:active {
 
 #state-loading p {
   margin-top: 12px;
-  color: #9ca3af;
+  color: var(--color-text-muted);
+  font-size: 13px;
 }

@@ -138,9 +138,9 @@ chrome.runtime.onInstalled.addListener((details) => {
   console.log('[ServiceWorker] Extension installed/updated:', details.reason);
 
   if (details.reason === 'install') {
-    // Show welcome page or instructions
+    // Show welcome page - navigate to dashboard devices section
     chrome.tabs.create({
-      url: 'https://app.clawku.ai/extension-setup',
+      url: 'http://localhost/?section=devices',
     });
   }
 });

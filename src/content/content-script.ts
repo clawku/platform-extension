@@ -42,7 +42,9 @@ chrome.runtime.onMessage.addListener(
     }
 
     if (message.type === 'GET_SNAPSHOT') {
-      const result = generateSnapshot();
+      const payload = message.payload as { format?: string; maxChars?: number } | undefined;
+      const maxChars = payload?.maxChars || 8000;
+      const result = generateSnapshot(maxChars);
       sendResponse({ success: true, result });
       return true;
     }
@@ -70,6 +72,8 @@ async function executeAction(
       return await performScroll(params);
     case 'select':
       return await performSelect(params);
+    case 'drag':
+      return await performDrag(params);
     default:
       return { success: false, error: `Unknown action: ${action}` };
   }
@@ -319,7 +323,101 @@ async function performSelect(
   return { success: true, result: { selected: values } };
 }
 
-function generateSnapshot(): unknown {
+async function performDrag(
+  params: BrowserActionParams
+): Promise<ContentScriptResponse> {
+  // Get start and end elements
+  const startRef = params.startRef || params.ref;
+  const endRef = params.endRef;
+
+  if (!startRef || !endRef) {
+    return { success: false, error: 'drag requires startRef and endRef' };
+  }
+
+  const startElement = elementRefs.get(startRef);
+  const endElement = elementRefs.get(endRef);
+
+  if (!startElement) {
+    return { success: false, error: `Start element not found: ${startRef}` };
+  }
+  if (!endElement) {
+    return { success: false, error: `End element not found: ${endRef}` };
+  }
+
+  // Get element positions
+  const startRect = startElement.getBoundingClientRect();
+  const endRect = endElement.getBoundingClientRect();
+
+  const startX = startRect.left + startRect.width / 2;
+  const startY = startRect.top + startRect.height / 2;
+  const endX = endRect.left + endRect.width / 2;
+  const endY = endRect.top + endRect.height / 2;
+
+  // Dispatch drag events
+  const mousedownEvent = new MouseEvent('mousedown', {
+    bubbles: true,
+    cancelable: true,
+    clientX: startX,
+    clientY: startY,
+    button: 0,
+  });
+
+  const mousemoveEvent = new MouseEvent('mousemove', {
+    bubbles: true,
+    cancelable: true,
+    clientX: endX,
+    clientY: endY,
+    button: 0,
+  });
+
+  const mouseupEvent = new MouseEvent('mouseup', {
+    bubbles: true,
+    cancelable: true,
+    clientX: endX,
+    clientY: endY,
+    button: 0,
+  });
+
+  startElement.dispatchEvent(mousedownEvent);
+  await sleep(50);
+  document.dispatchEvent(mousemoveEvent);
+  await sleep(50);
+  endElement.dispatchEvent(mouseupEvent);
+
+  // Also try HTML5 drag and drop API
+  const dragstartEvent = new DragEvent('dragstart', {
+    bubbles: true,
+    cancelable: true,
+    clientX: startX,
+    clientY: startY,
+  });
+
+  const dropEvent = new DragEvent('drop', {
+    bubbles: true,
+    cancelable: true,
+    clientX: endX,
+    clientY: endY,
+  });
+
+  const dragendEvent = new DragEvent('dragend', {
+    bubbles: true,
+    cancelable: true,
+    clientX: endX,
+    clientY: endY,
+  });
+
+  startElement.dispatchEvent(dragstartEvent);
+  await sleep(50);
+  endElement.dispatchEvent(dropEvent);
+  startElement.dispatchEvent(dragendEvent);
+
+  return {
+    success: true,
+    result: { dragged: true, from: startRef, to: endRef },
+  };
+}
+
+function generateSnapshot(maxChars: number = 8000): unknown {
   elementRefs.clear();
   let refCounter = 0;
 
@@ -396,12 +494,14 @@ function generateSnapshot(): unknown {
     const href = el.getAttribute('href');
     const type = el.getAttribute('type');
     const placeholder = el.getAttribute('placeholder');
+    const value = (el as HTMLInputElement).value;
 
     if (id) line += ` id="${id}"`;
     if (ariaLabel) line += ` "${ariaLabel}"`;
     if (href) line += ` href="${href.slice(0, 50)}"`;
     if (type) line += ` type="${type}"`;
     if (placeholder) line += ` placeholder="${placeholder}"`;
+    if (value && tag === 'input') line += ` value="${value.slice(0, 30)}"`;
 
     const text = getElementText(el);
     if (text) {
@@ -418,12 +518,15 @@ function generateSnapshot(): unknown {
   }
 
   const snapshot = serializeElement(document.body);
+  const truncated = snapshot.length > maxChars;
+  const finalSnapshot = truncated ? snapshot.slice(0, maxChars) + '\n...' : snapshot;
 
   return {
     url: window.location.href,
     title: document.title,
-    snapshot: snapshot.slice(0, 8000),
+    snapshot: finalSnapshot,
     refCount: refCounter,
+    truncated,
   };
 }
 

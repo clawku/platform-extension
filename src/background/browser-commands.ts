@@ -1,6 +1,8 @@
 import type {
   BrowserAction,
   BrowserActionParams,
+  BrowserActRequest,
+  BrowserActKind,
   BrowserResultPayload,
 } from '../types/messages.js';
 
@@ -10,6 +12,10 @@ interface CommandResult {
   error?: string;
 }
 
+/**
+ * Execute a browser command from platform-api
+ * Supports both OpenClaw format (action=act with kind=...) and direct actions
+ */
 export async function executeCommand(
   action: BrowserAction,
   params: BrowserActionParams
@@ -34,6 +40,14 @@ export async function executeCommand(
         return await takeScreenshot(params);
       case 'snapshot':
         return await getSnapshot(params);
+      case 'console':
+        return await getConsole(params);
+
+      // OpenClaw 'act' wrapper - routes to specific action based on kind
+      case 'act':
+        return await executeAct(params);
+
+      // Direct actions (legacy support)
       case 'click':
         return await executeContentAction('click', params);
       case 'type':
@@ -46,8 +60,42 @@ export async function executeCommand(
         return await executeContentAction('scroll', params);
       case 'select':
         return await executeContentAction('select', params);
-      case 'console':
-        return await getConsole(params);
+
+      // Unsupported OpenClaw actions - return helpful error messages
+      case 'start':
+      case 'stop':
+        return {
+          success: true,
+          result: {
+            ok: true,
+            note: 'Browser control via Clawku extension - browser is always running',
+          },
+        };
+      case 'profiles':
+        return {
+          success: true,
+          result: {
+            profiles: ['clawku-extension'],
+            current: 'clawku-extension',
+            note: 'Clawku extension controls your actual Chrome browser',
+          },
+        };
+      case 'pdf':
+        return {
+          success: false,
+          error: 'PDF export not supported via extension. Use screenshot instead.',
+        };
+      case 'upload':
+        return {
+          success: false,
+          error: 'File upload not supported via extension.',
+        };
+      case 'dialog':
+        return {
+          success: false,
+          error: 'Dialog handling not supported via extension.',
+        };
+
       default:
         return { success: false, error: `Unknown action: ${action}` };
     }
@@ -57,6 +105,230 @@ export async function executeCommand(
       success: false,
       error: error instanceof Error ? error.message : String(error),
     };
+  }
+}
+
+/**
+ * Handle OpenClaw 'act' action which wraps all interactions
+ * Supports both nested format (request={kind, ref, ...}) and flattened (kind, ref, ...)
+ */
+async function executeAct(params: BrowserActionParams): Promise<CommandResult> {
+  // Extract act parameters - support both nested (request) and flattened forms
+  const request = params.request;
+  const kind: BrowserActKind | undefined = request?.kind || params.kind;
+
+  if (!kind) {
+    return { success: false, error: 'act action requires "kind" parameter (click, type, scroll, etc.)' };
+  }
+
+  // Merge params: nested request takes precedence, then flattened params
+  const actParams: BrowserActionParams = {
+    ...params,
+    ...(request || {}),
+  };
+
+  console.log('[Commands] Act:', kind, actParams);
+
+  switch (kind) {
+    case 'click':
+      return await executeContentAction('click', actParams);
+    case 'type':
+      return await executeContentAction('type', actParams);
+    case 'press':
+      return await executeContentAction('press', actParams);
+    case 'hover':
+      return await executeContentAction('hover', actParams);
+    case 'scroll':
+      return await executeContentAction('scroll', actParams);
+    case 'select':
+      return await executeContentAction('select', actParams);
+    case 'drag':
+      return await executeContentAction('drag', actParams);
+    case 'fill':
+      return await executeFillForm(actParams);
+    case 'wait':
+      return await executeWait(actParams);
+    case 'close':
+      return await closeTab(actParams);
+    case 'resize':
+      return {
+        success: false,
+        error: 'Window resize not supported via extension',
+      };
+    case 'evaluate':
+      return await executeEvaluate(actParams);
+    default:
+      return { success: false, error: `Unknown act kind: ${kind}` };
+  }
+}
+
+/**
+ * Execute form fill action
+ */
+async function executeFillForm(params: BrowserActionParams): Promise<CommandResult> {
+  if (!params.fields || params.fields.length === 0) {
+    return { success: false, error: 'fill action requires fields parameter' };
+  }
+
+  let tabId = params.targetId;
+  if (!tabId) {
+    const [activeTab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    tabId = activeTab?.id;
+  }
+
+  if (!tabId) {
+    return { success: false, error: 'No tab for fill action' };
+  }
+
+  // Execute fill in content script
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: fillFormFields,
+    args: [params.fields],
+  });
+
+  if (!results || results.length === 0) {
+    return { success: false, error: 'Failed to execute fill' };
+  }
+
+  return results[0].result as CommandResult;
+}
+
+// Fill form fields in page context
+function fillFormFields(fields: Array<Record<string, unknown>>): CommandResult {
+  try {
+    for (const field of fields) {
+      const selector = field.selector as string;
+      const ref = field.ref as string;
+      const value = field.value as string;
+
+      let element: Element | null = null;
+
+      if (selector) {
+        element = document.querySelector(selector);
+      } else if (ref) {
+        // Try to find by data-ref or other mechanisms
+        element = document.querySelector(`[data-ref="${ref}"]`);
+      }
+
+      if (element && (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) {
+        element.value = value;
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }
+    return { success: true, result: { filled: fields.length } };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+/**
+ * Execute wait action
+ */
+async function executeWait(params: BrowserActionParams): Promise<CommandResult> {
+  const timeMs = params.timeMs || params.timeoutMs || 1000;
+
+  // Simple delay
+  await new Promise(resolve => setTimeout(resolve, timeMs));
+
+  // If selector specified, wait for element
+  if (params.selector) {
+    let tabId = params.targetId;
+    if (!tabId) {
+      const [activeTab] = await chrome.tabs.query({
+        active: true,
+        currentWindow: true,
+      });
+      tabId = activeTab?.id;
+    }
+
+    if (tabId) {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: waitForSelector,
+        args: [params.selector, params.timeoutMs || 10000],
+      });
+
+      if (results && results.length > 0) {
+        return results[0].result as CommandResult;
+      }
+    }
+  }
+
+  return { success: true, result: { waited: timeMs } };
+}
+
+// Wait for selector in page context
+function waitForSelector(selector: string, timeoutMs: number): Promise<CommandResult> {
+  return new Promise((resolve) => {
+    const startTime = Date.now();
+
+    const check = () => {
+      const element = document.querySelector(selector);
+      if (element) {
+        resolve({ success: true, result: { found: true, selector } });
+        return;
+      }
+
+      if (Date.now() - startTime > timeoutMs) {
+        resolve({ success: false, error: `Timeout waiting for ${selector}` });
+        return;
+      }
+
+      requestAnimationFrame(check);
+    };
+
+    check();
+  });
+}
+
+/**
+ * Execute JavaScript evaluation
+ */
+async function executeEvaluate(params: BrowserActionParams): Promise<CommandResult> {
+  if (!params.fn) {
+    return { success: false, error: 'evaluate action requires fn parameter' };
+  }
+
+  let tabId = params.targetId;
+  if (!tabId) {
+    const [activeTab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    tabId = activeTab?.id;
+  }
+
+  if (!tabId) {
+    return { success: false, error: 'No tab for evaluate' };
+  }
+
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (fnString: string) => {
+        try {
+          // eslint-disable-next-line no-eval
+          const result = eval(fnString);
+          return { success: true, result };
+        } catch (error) {
+          return { success: false, error: String(error) };
+        }
+      },
+      args: [params.fn],
+    });
+
+    if (!results || results.length === 0) {
+      return { success: false, error: 'Failed to evaluate' };
+    }
+
+    return results[0].result as CommandResult;
+  } catch (error) {
+    return { success: false, error: String(error) };
   }
 }
 
@@ -75,10 +347,12 @@ async function getTabs(): Promise<CommandResult> {
   const tabs = await chrome.tabs.query({});
   const tabList = tabs.map((tab) => ({
     id: tab.id,
+    targetId: String(tab.id), // OpenClaw expects string targetId
     url: tab.url,
     title: tab.title,
     active: tab.active,
     windowId: tab.windowId,
+    type: 'page',
   }));
 
   return {
@@ -88,14 +362,21 @@ async function getTabs(): Promise<CommandResult> {
 }
 
 async function openTab(params: BrowserActionParams): Promise<CommandResult> {
-  if (!params.url) {
-    return { success: false, error: 'URL is required' };
+  // Support both 'url' and 'targetUrl' (OpenClaw uses targetUrl)
+  const url = params.url || params.targetUrl;
+  if (!url) {
+    return { success: false, error: 'URL is required (url or targetUrl)' };
   }
 
-  const tab = await chrome.tabs.create({ url: params.url, active: true });
+  const tab = await chrome.tabs.create({ url, active: true });
   return {
     success: true,
-    result: { tabId: tab.id, url: tab.url },
+    result: {
+      ok: true,
+      tabId: tab.id,
+      targetId: String(tab.id),
+      url: tab.url,
+    },
   };
 }
 
@@ -133,8 +414,10 @@ async function focusTab(params: BrowserActionParams): Promise<CommandResult> {
 }
 
 async function navigateTab(params: BrowserActionParams): Promise<CommandResult> {
-  if (!params.url) {
-    return { success: false, error: 'URL is required' };
+  // Support both 'url' and 'targetUrl' (OpenClaw uses targetUrl)
+  const url = params.url || params.targetUrl;
+  if (!url) {
+    return { success: false, error: 'URL is required (url or targetUrl)' };
   }
 
   let tabId = params.targetId;
@@ -151,8 +434,15 @@ async function navigateTab(params: BrowserActionParams): Promise<CommandResult> 
     return { success: false, error: 'No tab to navigate' };
   }
 
-  await chrome.tabs.update(tabId, { url: params.url });
-  return { success: true, result: { navigated: params.url } };
+  await chrome.tabs.update(tabId, { url });
+  return {
+    success: true,
+    result: {
+      ok: true,
+      targetId: String(tabId),
+      url,
+    },
+  };
 }
 
 async function takeScreenshot(
@@ -214,21 +504,78 @@ async function getSnapshot(params: BrowserActionParams): Promise<CommandResult> 
     return { success: false, error: 'No tab to snapshot' };
   }
 
-  // Execute content script to get DOM snapshot
-  const results = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: generatePageSnapshot,
-    args: [params.snapshotFormat || 'ai', params.maxChars || 8000],
-  });
+  const format = params.snapshotFormat || 'ai';
+  const maxChars = params.maxChars || 8000;
 
-  if (!results || results.length === 0) {
-    return { success: false, error: 'Failed to get snapshot' };
+  // First, ensure content script is loaded
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['content/content-script.js'],
+    });
+  } catch {
+    // Script might already be loaded
   }
 
-  return {
-    success: true,
-    result: results[0].result,
-  };
+  // Use content script's snapshot generation so refs persist for subsequent actions
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, {
+      type: 'GET_SNAPSHOT',
+      payload: { format, maxChars },
+    });
+
+    if (!response || !response.success) {
+      throw new Error(response?.error || 'Snapshot failed');
+    }
+
+    const snapshotData = response.result as {
+      url: string;
+      title: string;
+      snapshot: string;
+      refCount?: number;
+    };
+
+    // Return in OpenClaw expected format
+    return {
+      success: true,
+      result: {
+        url: snapshotData.url,
+        title: snapshotData.title,
+        snapshot: snapshotData.snapshot,
+        format,
+        targetId: String(tabId),
+        truncated: snapshotData.snapshot.endsWith('...'),
+        stats: { refs: snapshotData.refCount || 0 },
+      },
+    };
+  } catch {
+    // Fallback to direct execution if content script messaging fails
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: generatePageSnapshot,
+      args: [format, maxChars],
+    });
+
+    if (!results || results.length === 0) {
+      return { success: false, error: 'Failed to get snapshot' };
+    }
+
+    const snapshotData = results[0].result as {
+      url: string;
+      title: string;
+      snapshot: string;
+      format: string;
+    };
+
+    return {
+      success: true,
+      result: {
+        ...snapshotData,
+        targetId: String(tabId),
+        truncated: snapshotData.snapshot.endsWith('...'),
+      },
+    };
+  }
 }
 
 // This function runs in the page context

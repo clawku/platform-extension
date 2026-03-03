@@ -73,10 +73,10 @@ async function loadStatus() {
     }
 
     if (status.connected) {
-      personaName.textContent = status.personaName || 'Unknown Persona';
+      personaName.textContent = status.personaName || 'All Personas';
       showState('connected');
     } else {
-      personaNameDisconnected.textContent = status.personaName || 'Unknown Persona';
+      personaNameDisconnected.textContent = status.personaName || 'All Personas';
       showState('disconnected');
     }
   } catch (error) {
