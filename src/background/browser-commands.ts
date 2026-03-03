@@ -170,8 +170,13 @@ async function executeFillForm(params: BrowserActionParams): Promise<CommandResu
     return { success: false, error: 'fill action requires fields parameter' };
   }
 
-  let tabId = params.targetId;
-  if (!tabId) {
+  let tabId: number | undefined = params.targetId
+    ? typeof params.targetId === 'string'
+      ? parseInt(params.targetId, 10)
+      : params.targetId
+    : undefined;
+
+  if (!tabId || isNaN(tabId)) {
     const [activeTab] = await chrome.tabs.query({
       active: true,
       currentWindow: true,
@@ -237,8 +242,13 @@ async function executeWait(params: BrowserActionParams): Promise<CommandResult> 
 
   // If selector specified, wait for element
   if (params.selector) {
-    let tabId = params.targetId;
-    if (!tabId) {
+    let tabId: number | undefined = params.targetId
+      ? typeof params.targetId === 'string'
+        ? parseInt(params.targetId, 10)
+        : params.targetId
+      : undefined;
+
+    if (!tabId || isNaN(tabId)) {
       const [activeTab] = await chrome.tabs.query({
         active: true,
         currentWindow: true,
@@ -294,8 +304,13 @@ async function executeEvaluate(params: BrowserActionParams): Promise<CommandResu
     return { success: false, error: 'evaluate action requires fn parameter' };
   }
 
-  let tabId = params.targetId;
-  if (!tabId) {
+  let tabId: number | undefined = params.targetId
+    ? typeof params.targetId === 'string'
+      ? parseInt(params.targetId, 10)
+      : params.targetId
+    : undefined;
+
+  if (!tabId || isNaN(tabId)) {
     const [activeTab] = await chrome.tabs.query({
       active: true,
       currentWindow: true,
@@ -429,9 +444,13 @@ async function navigateTab(params: BrowserActionParams): Promise<CommandResult> 
     return { success: false, error: 'URL is required (url or targetUrl)' };
   }
 
-  let tabId = params.targetId;
+  let tabId: number | undefined = params.targetId
+    ? typeof params.targetId === 'string'
+      ? parseInt(params.targetId, 10)
+      : params.targetId
+    : undefined;
 
-  if (!tabId) {
+  if (!tabId || isNaN(tabId)) {
     const [activeTab] = await chrome.tabs.query({
       active: true,
       currentWindow: true,
@@ -504,9 +523,13 @@ async function takeScreenshot(
 }
 
 async function getSnapshot(params: BrowserActionParams): Promise<CommandResult> {
-  let tabId = params.targetId;
+  let tabId: number | undefined = params.targetId
+    ? typeof params.targetId === 'string'
+      ? parseInt(params.targetId, 10)
+      : params.targetId
+    : undefined;
 
-  if (!tabId) {
+  if (!tabId || isNaN(tabId)) {
     const [activeTab] = await chrome.tabs.query({
       active: true,
       currentWindow: true,
@@ -718,9 +741,13 @@ async function executeContentAction(
   action: string,
   params: BrowserActionParams
 ): Promise<CommandResult> {
-  let tabId = params.targetId;
+  let tabId: number | undefined = params.targetId
+    ? typeof params.targetId === 'string'
+      ? parseInt(params.targetId, 10)
+      : params.targetId
+    : undefined;
 
-  if (!tabId) {
+  if (!tabId || isNaN(tabId)) {
     const [activeTab] = await chrome.tabs.query({
       active: true,
       currentWindow: true,
