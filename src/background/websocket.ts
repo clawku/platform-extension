@@ -16,8 +16,31 @@ class WebSocketConnection {
   private storage: ExtensionStorage | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
+  private isManualConnect = false;
 
-  async connect(): Promise<boolean> {
+  async connect(manual = false): Promise<boolean> {
+    // Track if this is a manual connect (user clicked reconnect)
+    this.isManualConnect = manual;
+
+    // For manual reconnects, reset attempts counter to allow retries
+    if (manual) {
+      this.reconnectAttempts = 0;
+      // Cancel any pending reconnect timer
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+    }
+
+    // Close existing connection if any
+    if (this.ws) {
+      this.cleanup();
+      if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+        this.ws.close();
+      }
+      this.ws = null;
+    }
+
     // Load storage
     const result = await chrome.storage.local.get([
       'token',
@@ -35,6 +58,14 @@ class WebSocketConnection {
     const url = `${wsUrl}/browser/ws?token=${this.storage.token}`;
 
     return new Promise((resolve) => {
+      let resolved = false;
+      const safeResolve = (value: boolean) => {
+        if (!resolved) {
+          resolved = true;
+          resolve(value);
+        }
+      };
+
       try {
         console.log('[WebSocket] Connecting to', wsUrl);
         this.ws = new WebSocket(url);
@@ -42,9 +73,10 @@ class WebSocketConnection {
         this.ws.onopen = () => {
           console.log('[WebSocket] Connected');
           this.reconnectAttempts = 0;
+          this.isManualConnect = false;
           this.startPing();
           this.updateBadge('connected');
-          resolve(true);
+          safeResolve(true);
         };
 
         this.ws.onmessage = (event) => {
@@ -55,9 +87,11 @@ class WebSocketConnection {
           console.log('[WebSocket] Closed:', event.code, event.reason);
           this.cleanup();
           this.updateBadge('disconnected');
-          this.scheduleReconnect();
-          if (this.reconnectAttempts === 0) {
-            resolve(false);
+          // Always resolve the initial connect promise
+          safeResolve(false);
+          // Then schedule reconnect (only for auto-reconnects)
+          if (!this.isManualConnect) {
+            this.scheduleReconnect();
           }
         };
 
@@ -67,7 +101,7 @@ class WebSocketConnection {
         };
       } catch (error) {
         console.error('[WebSocket] Connection error:', error);
-        resolve(false);
+        safeResolve(false);
       }
     });
   }

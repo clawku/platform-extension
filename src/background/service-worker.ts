@@ -98,9 +98,10 @@ chrome.runtime.onMessage.addListener((message: PopupMessage, sender, sendRespons
           return;
         }
 
-        const connected = await wsConnection.connect();
+        // Pass manual=true to reset reconnect attempts and properly handle the connection
+        const connected = await wsConnection.connect(true);
         await chrome.storage.local.set({ wsConnected: connected });
-        sendResponse({ success: connected });
+        sendResponse({ success: connected, error: connected ? undefined : 'Connection failed' });
         break;
       }
 
