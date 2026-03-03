@@ -1,7 +1,7 @@
 import type { ExtensionStorage, ConnectionStatus } from '../types/messages.js';
 
-const DEFAULT_API_URL = 'https://api.clawku.ai';
-const DEFAULT_WS_URL = 'wss://api.clawku.ai';
+const DEFAULT_API_URL = 'https://api.b.clawku.id';
+const DEFAULT_WS_URL = 'wss://api.b.clawku.id';
 
 export async function pair(
   code: string,

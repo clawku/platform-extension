@@ -141,7 +141,7 @@ chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === 'install') {
     // Show welcome page - navigate to dashboard devices section
     chrome.tabs.create({
-      url: 'https://clawku.ai/?section=devices',
+      url: 'https://clawku.id/?section=devices',
     });
   }
 });

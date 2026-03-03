@@ -54,7 +54,7 @@ class WebSocketConnection {
       return false;
     }
 
-    const wsUrl = this.storage.wsBaseUrl || 'wss://api.clawku.ai';
+    const wsUrl = this.storage.wsBaseUrl || 'wss://api.b.clawku.id';
     const url = `${wsUrl}/browser/ws?token=${this.storage.token}`;
 
     return new Promise((resolve) => {
