@@ -381,9 +381,13 @@ async function openTab(params: BrowserActionParams): Promise<CommandResult> {
 }
 
 async function closeTab(params: BrowserActionParams): Promise<CommandResult> {
-  const tabId = params.targetId;
+  const tabId = params.targetId
+    ? typeof params.targetId === 'string'
+      ? parseInt(params.targetId, 10)
+      : params.targetId
+    : undefined;
 
-  if (tabId) {
+  if (tabId && !isNaN(tabId)) {
     await chrome.tabs.remove(tabId);
   } else {
     // Close active tab
@@ -404,8 +408,13 @@ async function focusTab(params: BrowserActionParams): Promise<CommandResult> {
     return { success: false, error: 'Tab ID is required' };
   }
 
-  await chrome.tabs.update(params.targetId, { active: true });
-  const tab = await chrome.tabs.get(params.targetId);
+  const tabId = typeof params.targetId === 'string' ? parseInt(params.targetId, 10) : params.targetId;
+  if (isNaN(tabId)) {
+    return { success: false, error: 'Invalid tab ID' };
+  }
+
+  await chrome.tabs.update(tabId, { active: true });
+  const tab = await chrome.tabs.get(tabId);
   if (tab.windowId) {
     await chrome.windows.update(tab.windowId, { focused: true });
   }
@@ -452,8 +461,13 @@ async function takeScreenshot(
   const quality = params.quality || 90;
 
   // Get the target tab
-  let tabId = params.targetId;
-  if (!tabId) {
+  let tabId: number | undefined = params.targetId
+    ? typeof params.targetId === 'string'
+      ? parseInt(params.targetId, 10)
+      : params.targetId
+    : undefined;
+
+  if (!tabId || isNaN(tabId)) {
     const [activeTab] = await chrome.tabs.query({
       active: true,
       currentWindow: true,
