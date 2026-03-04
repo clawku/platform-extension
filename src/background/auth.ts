@@ -1,4 +1,5 @@
 import type { ExtensionStorage, ConnectionStatus } from '../types/messages.js';
+import { ensureSigningKey, clearSigningKeys } from './crypto.js';
 
 const DEFAULT_API_URL = 'https://api.b.clawku.id';
 const DEFAULT_WS_URL = 'wss://api.b.clawku.id';
@@ -10,16 +11,25 @@ export async function pair(
   const baseUrl = apiBaseUrl || DEFAULT_API_URL;
 
   try {
+    // Generate signing keypair for this extension
+    const signingKey = await ensureSigningKey();
+    console.log('[Auth] Generated signing key');
+
     const response = await fetch(`${baseUrl}/browser/pair`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ code }),
+      body: JSON.stringify({
+        code,
+        signingPublicKey: signingKey.publicKeyPem,
+      }),
     });
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
+      // Clear signing keys on failed pairing
+      await clearSigningKeys();
       return {
         success: false,
         error: error.message || `Pairing failed (${response.status})`,
@@ -45,6 +55,8 @@ export async function pair(
     return { success: true };
   } catch (error) {
     console.error('[Auth] Pairing error:', error);
+    // Clear signing keys on error
+    await clearSigningKeys();
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Network error',
@@ -68,6 +80,8 @@ export async function disconnect(): Promise<void> {
     }
   }
 
+  // Clear signing keys
+  await clearSigningKeys();
   await chrome.storage.local.clear();
   console.log('[Auth] Disconnected and cleared storage');
 }

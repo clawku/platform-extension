@@ -4,6 +4,7 @@ import type {
   BrowserResultPayload,
   ExtensionStorage,
 } from '../types/messages.js';
+import { signMessage } from './crypto.js';
 
 type MessageHandler = (message: BrowserJobMessage) => void;
 
@@ -121,27 +122,58 @@ class WebSocketConnection {
     }
   }
 
-  sendResult(payload: BrowserResultPayload) {
+  async sendResult(payload: BrowserResultPayload): Promise<boolean> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       console.error('[WebSocket] Cannot send - not connected');
       return false;
     }
 
-    const message = {
-      type: 'browser.result',
-      payload,
-    };
+    try {
+      // Create the payload JSON for signing
+      const payloadJson = JSON.stringify(payload);
 
-    this.ws.send(JSON.stringify(message));
-    console.log('[WebSocket] Sent result for job:', payload.jobId);
-    return true;
+      // Sign the payload
+      const signature = await signMessage(payloadJson);
+
+      const message = {
+        type: 'browser.result',
+        payload,
+        signature, // Ed25519 signature of the payload JSON
+      };
+
+      this.ws.send(JSON.stringify(message));
+      console.log('[WebSocket] Sent signed result for job:', payload.jobId);
+      return true;
+    } catch (error) {
+      console.error('[WebSocket] Failed to sign message:', error);
+      // Fall back to unsigned message if signing fails
+      const message = {
+        type: 'browser.result',
+        payload,
+      };
+      this.ws.send(JSON.stringify(message));
+      console.log('[WebSocket] Sent unsigned result for job:', payload.jobId);
+      return true;
+    }
   }
 
   private startPing() {
     this.stopPing();
-    this.pingInterval = setInterval(() => {
+    this.pingInterval = setInterval(async () => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ type: 'ping' }));
+        try {
+          const timestamp = Date.now();
+          const pingPayload = JSON.stringify({ timestamp });
+          const signature = await signMessage(pingPayload);
+          this.ws.send(JSON.stringify({
+            type: 'ping',
+            payload: { timestamp },
+            signature,
+          }));
+        } catch {
+          // Fall back to unsigned ping
+          this.ws.send(JSON.stringify({ type: 'ping' }));
+        }
       }
     }, 30000); // Ping every 30 seconds
   }
