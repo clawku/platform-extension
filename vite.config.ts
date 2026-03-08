@@ -10,6 +10,7 @@ export default defineConfig({
         'background/service-worker': resolve(__dirname, 'src/background/service-worker.ts'),
         'popup/popup': resolve(__dirname, 'src/popup/popup.ts'),
         'content/content-script': resolve(__dirname, 'src/content/content-script.ts'),
+        'offscreen/offscreen': resolve(__dirname, 'src/offscreen/offscreen.ts'),
       },
       output: {
         entryFileNames: '[name].js',

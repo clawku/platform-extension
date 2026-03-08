@@ -20,6 +20,9 @@ const btnDisconnect2 = document.getElementById('btn-disconnect-2')!;
 const btnReconnect = document.getElementById('btn-reconnect')!;
 const btnRetry = document.getElementById('btn-retry')!;
 
+const activityLog = document.getElementById('activity-log')!;
+const activityList = document.getElementById('activity-list')!;
+
 // State management
 function showState(state: 'loading' | 'unpaired' | 'connected' | 'disconnected' | 'error') {
   stateLoading.classList.add('hidden');
@@ -75,6 +78,7 @@ async function loadStatus() {
     if (status.connected) {
       personaName.textContent = status.personaName || 'All Personas';
       showState('connected');
+      loadActivities();
     } else {
       personaNameDisconnected.textContent = status.personaName || 'All Personas';
       showState('disconnected');
@@ -209,5 +213,55 @@ inputPairingCode.addEventListener('keypress', (e) => {
   }
 });
 
+// Load and display activities
+async function loadActivities() {
+  try {
+    const response = (await sendMessage({ type: 'GET_ACTIVITIES' })) as {
+      activities: Array<{
+        id: string;
+        timestamp: number;
+        action: string;
+        status: 'pending' | 'success' | 'error';
+        details?: string;
+        error?: string;
+      }>;
+    };
+
+    if (response.activities && response.activities.length > 0) {
+      activityLog.classList.remove('hidden');
+      activityList.innerHTML = '';
+
+      for (const activity of response.activities.slice(0, 10)) {
+        const li = document.createElement('li');
+        li.className = `activity-item activity-${activity.status}`;
+
+        const time = new Date(activity.timestamp).toLocaleTimeString();
+        const statusIcon = activity.status === 'success' ? '✓' : activity.status === 'error' ? '✗' : '⋯';
+        const statusClass = activity.status === 'success' ? 'success' : activity.status === 'error' ? 'error' : 'pending';
+
+        li.innerHTML = `
+          <span class="activity-time">${time}</span>
+          <span class="activity-action">${activity.action}</span>
+          <span class="activity-status ${statusClass}">${statusIcon}</span>
+          ${activity.error ? `<span class="activity-error">${activity.error}</span>` : ''}
+        `;
+
+        activityList.appendChild(li);
+      }
+    } else {
+      activityLog.classList.add('hidden');
+    }
+  } catch (error) {
+    console.error('Failed to load activities:', error);
+  }
+}
+
 // Initialize
 loadStatus();
+
+// Refresh activities every 2 seconds when popup is open
+setInterval(() => {
+  if (!stateConnected.classList.contains('hidden')) {
+    loadActivities();
+  }
+}, 2000);

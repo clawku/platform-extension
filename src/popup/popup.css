@@ -325,6 +325,53 @@ button:active {
   border-bottom: none;
 }
 
+.activity-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.activity-time {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  min-width: 60px;
+}
+
+.activity-action {
+  font-weight: 600;
+  color: var(--color-navy);
+}
+
+.activity-status {
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.activity-status.success {
+  background: var(--color-success-light);
+  color: var(--color-success);
+}
+
+.activity-status.error {
+  background: var(--color-error-light);
+  color: var(--color-error);
+}
+
+.activity-status.pending {
+  background: var(--color-warning-light);
+  color: var(--color-warning);
+}
+
+.activity-error {
+  width: 100%;
+  font-size: 11px;
+  color: var(--color-error);
+  margin-top: 4px;
+  word-break: break-all;
+}
+
 /* Error */
 .error-message {
   padding: 16px;

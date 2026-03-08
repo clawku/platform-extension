@@ -52,14 +52,31 @@ export async function executeCommand(
         return await executeContentAction('click', params);
       case 'type':
         return await executeContentAction('type', params);
+      case 'type_raw':
+        return await typeRawViaDebugger(params);
       case 'press':
         return await executeContentAction('press', params);
+      case 'press_key':
+      case 'key':
+        return await pressKeyViaDebugger(params);
       case 'hover':
         return await executeContentAction('hover', params);
       case 'scroll':
         return await executeContentAction('scroll', params);
       case 'select':
         return await executeContentAction('select', params);
+      case 'rapidClick':
+        return await executeContentAction('rapidClick', params);
+      case 'clickAll':
+        return await executeContentAction('clickAll', params);
+      case 'click_send_button':
+        return await executeContentAction('click_send_button', params);
+      case 'find_comment_input':
+        return await executeContentAction('find_comment_input', params);
+      case 'click_at':
+        return await clickAtCoordinates(params);
+      case 'type_at':
+        return await typeAtCoordinates(params);
 
       // Unsupported OpenClaw actions - return helpful error messages
       case 'start':
@@ -134,8 +151,12 @@ async function executeAct(params: BrowserActionParams): Promise<CommandResult> {
       return await executeContentAction('click', actParams);
     case 'type':
       return await executeContentAction('type', actParams);
+    case 'type_raw':
+      return await typeRawViaDebugger(actParams);
     case 'press':
       return await executeContentAction('press', actParams);
+    case 'press_key':
+      return await pressKeyViaDebugger(actParams);
     case 'hover':
       return await executeContentAction('hover', actParams);
     case 'scroll':
@@ -157,9 +178,807 @@ async function executeAct(params: BrowserActionParams): Promise<CommandResult> {
       };
     case 'evaluate':
       return await executeEvaluate(actParams);
+    case 'click_at':
+      return await clickAtCoordinates(actParams);
+    case 'type_at':
+      return await typeAtCoordinates(actParams);
+    case 'click_send_button':
+      return await executeContentAction('click_send_button', actParams);
+    case 'find_comment_input':
+      return await executeContentAction('find_comment_input', actParams);
     default:
       return { success: false, error: `Unknown act kind: ${kind}` };
   }
+}
+
+/**
+ * Type text using Chrome DevTools Protocol (CDP) via chrome.debugger API
+ * This bypasses DOM-level anti-bot measures by sending keyboard events at browser level
+ */
+async function typeRawViaDebugger(params: BrowserActionParams): Promise<CommandResult> {
+  const text = params.text;
+  if (!text) {
+    return { success: false, error: 'type_raw requires text parameter' };
+  }
+
+  // Get target tab
+  let tabId: number | undefined = params.targetId
+    ? typeof params.targetId === 'string'
+      ? parseInt(params.targetId, 10)
+      : params.targetId
+    : undefined;
+
+  if (!tabId || isNaN(tabId)) {
+    const [activeTab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    tabId = activeTab?.id;
+  }
+
+  if (!tabId) {
+    return { success: false, error: 'No tab for type_raw' };
+  }
+
+  const target = { tabId };
+
+  // Check if debugger API is available - if not, fallback to content script
+  if (!chrome.debugger) {
+    console.log('[type_raw] chrome.debugger not available, using content script fallback');
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: (inputText: string) => {
+          // Find active/focused element or any input field
+          let element = document.activeElement as HTMLInputElement | HTMLTextAreaElement;
+          if (!element || (element.tagName !== 'INPUT' && element.tagName !== 'TEXTAREA' && !element.isContentEditable)) {
+            // Try to find any visible input field
+            const inputs = document.querySelectorAll('input:not([type="hidden"]), textarea, [contenteditable="true"]');
+            for (const input of inputs) {
+              const rect = input.getBoundingClientRect();
+              if (rect.width > 0 && rect.height > 0) {
+                element = input as HTMLInputElement;
+                element.focus();
+                break;
+              }
+            }
+          }
+          if (element && (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA')) {
+            element.value = inputText;
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+            element.dispatchEvent(new Event('change', { bubbles: true }));
+            return { typed: true, element: element.tagName };
+          } else if (element && element.isContentEditable) {
+            element.textContent = inputText;
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+            return { typed: true, element: 'contenteditable' };
+          }
+          return { typed: false, error: 'No input element found' };
+        },
+        args: [text],
+      });
+      const result = results[0]?.result;
+      if (result?.typed) {
+        return { success: true, result: { ...result, method: 'content-script' } };
+      }
+      return { success: false, error: result?.error || 'Content script type failed' };
+    } catch (err) {
+      return { success: false, error: `Content script type fallback failed: ${err}` };
+    }
+  }
+
+  try {
+    // Attach debugger to tab
+    await chrome.debugger.attach(target, '1.3');
+    console.log('[type_raw] Debugger attached to tab', tabId);
+
+    // Type each character using CDP Input.dispatchKeyEvent
+    for (const char of text) {
+      // Send keyDown event
+      await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+        type: 'keyDown',
+        key: char,
+        text: char,
+        unmodifiedText: char,
+        // windowsVirtualKeyCode and nativeVirtualKeyCode for special handling
+        windowsVirtualKeyCode: char.charCodeAt(0),
+        nativeVirtualKeyCode: char.charCodeAt(0),
+      });
+
+      // Send char event (for text input)
+      await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+        type: 'char',
+        key: char,
+        text: char,
+        unmodifiedText: char,
+      });
+
+      // Send keyUp event
+      await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+        type: 'keyUp',
+        key: char,
+        text: char,
+        unmodifiedText: char,
+        windowsVirtualKeyCode: char.charCodeAt(0),
+        nativeVirtualKeyCode: char.charCodeAt(0),
+      });
+
+      // Small delay between characters for more natural typing
+      if (params.slowly) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    }
+
+    // If submit requested, press Enter using robust key sequence
+    if (params.submit) {
+      // Small delay after typing before pressing Enter
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Use rawKeyDown which is more reliable for special keys
+      await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+        type: 'rawKeyDown',
+        key: 'Enter',
+        code: 'Enter',
+        windowsVirtualKeyCode: 13,
+        nativeVirtualKeyCode: 13,
+      });
+
+      // Send char event with carriage return (important for some apps)
+      await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+        type: 'char',
+        key: 'Enter',
+        code: 'Enter',
+        text: '\r',
+        unmodifiedText: '\r',
+        windowsVirtualKeyCode: 13,
+        nativeVirtualKeyCode: 13,
+      });
+
+      // Small delay
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      // Send keyUp
+      await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+        type: 'keyUp',
+        key: 'Enter',
+        code: 'Enter',
+        windowsVirtualKeyCode: 13,
+        nativeVirtualKeyCode: 13,
+      });
+    }
+
+    console.log('[type_raw] Successfully typed', text.length, 'characters');
+
+    return {
+      success: true,
+      result: {
+        typed: text.length,
+        method: 'cdp',
+        note: 'Typed via Chrome DevTools Protocol',
+      },
+    };
+  } catch (error) {
+    console.error('[type_raw] Error:', error);
+    return {
+      success: false,
+      error: `type_raw failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  } finally {
+    // Always detach debugger
+    try {
+      await chrome.debugger.detach(target);
+      console.log('[type_raw] Debugger detached');
+    } catch {
+      // Ignore detach errors (might already be detached)
+    }
+  }
+}
+
+/**
+ * Key code mappings for CDP Input.dispatchKeyEvent
+ */
+const KEY_CODES: Record<string, { code: string; keyCode: number; text?: string }> = {
+  Enter: { code: 'Enter', keyCode: 13, text: '\r' },
+  Tab: { code: 'Tab', keyCode: 9 },
+  Escape: { code: 'Escape', keyCode: 27 },
+  Backspace: { code: 'Backspace', keyCode: 8 },
+  Delete: { code: 'Delete', keyCode: 46 },
+  ArrowUp: { code: 'ArrowUp', keyCode: 38 },
+  ArrowDown: { code: 'ArrowDown', keyCode: 40 },
+  ArrowLeft: { code: 'ArrowLeft', keyCode: 37 },
+  ArrowRight: { code: 'ArrowRight', keyCode: 39 },
+  Home: { code: 'Home', keyCode: 36 },
+  End: { code: 'End', keyCode: 35 },
+  PageUp: { code: 'PageUp', keyCode: 33 },
+  PageDown: { code: 'PageDown', keyCode: 34 },
+  Space: { code: 'Space', keyCode: 32, text: ' ' },
+  ' ': { code: 'Space', keyCode: 32, text: ' ' },
+};
+
+/**
+ * Press a key using Chrome DevTools Protocol (CDP) via chrome.debugger API
+ * This bypasses DOM-level event handling by sending keyboard events at browser level
+ * Used for submitting forms on anti-bot sites like TikTok Live
+ */
+async function pressKeyViaDebugger(params: BrowserActionParams): Promise<CommandResult> {
+  const key = params.key || 'Enter';
+  const keyInfo = KEY_CODES[key] || { code: key, keyCode: key.charCodeAt(0) };
+
+  // Get target tab
+  let tabId: number | undefined = params.targetId
+    ? typeof params.targetId === 'string'
+      ? parseInt(params.targetId, 10)
+      : params.targetId
+    : undefined;
+
+  if (!tabId || isNaN(tabId)) {
+    const [activeTab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    tabId = activeTab?.id;
+  }
+
+  if (!tabId) {
+    return { success: false, error: 'No tab for press_key' };
+  }
+
+  const target = { tabId };
+
+  // Check if debugger API is available - if not, fallback to content script
+  if (!chrome.debugger) {
+    console.log('[press_key] chrome.debugger not available, using content script fallback');
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: (keyName: string) => {
+          const activeEl = document.activeElement || document.body;
+
+          // Dispatch keyboard events
+          const keydownEvent = new KeyboardEvent('keydown', {
+            key: keyName,
+            code: keyName,
+            keyCode: keyName === 'Enter' ? 13 : keyName.charCodeAt(0),
+            which: keyName === 'Enter' ? 13 : keyName.charCodeAt(0),
+            bubbles: true,
+            cancelable: true,
+          });
+
+          const keypressEvent = new KeyboardEvent('keypress', {
+            key: keyName,
+            code: keyName,
+            keyCode: keyName === 'Enter' ? 13 : keyName.charCodeAt(0),
+            which: keyName === 'Enter' ? 13 : keyName.charCodeAt(0),
+            bubbles: true,
+            cancelable: true,
+          });
+
+          const keyupEvent = new KeyboardEvent('keyup', {
+            key: keyName,
+            code: keyName,
+            keyCode: keyName === 'Enter' ? 13 : keyName.charCodeAt(0),
+            which: keyName === 'Enter' ? 13 : keyName.charCodeAt(0),
+            bubbles: true,
+            cancelable: true,
+          });
+
+          activeEl.dispatchEvent(keydownEvent);
+          activeEl.dispatchEvent(keypressEvent);
+          activeEl.dispatchEvent(keyupEvent);
+
+          return { pressed: true, key: keyName, method: 'content-script' };
+        },
+        args: [key],
+      });
+      const result = results[0]?.result;
+      if (result?.pressed) {
+        return { success: true, result };
+      }
+      return { success: false, error: 'Content script press_key failed' };
+    } catch (err) {
+      return { success: false, error: `Content script press_key fallback failed: ${err}` };
+    }
+  }
+
+  try {
+    // Attach debugger to tab
+    await chrome.debugger.attach(target, '1.3');
+    console.log('[press_key] Debugger attached to tab', tabId);
+
+    // Build event params
+    const baseParams = {
+      key,
+      code: keyInfo.code,
+      windowsVirtualKeyCode: keyInfo.keyCode,
+      nativeVirtualKeyCode: keyInfo.keyCode,
+      ...(keyInfo.text ? { text: keyInfo.text } : {}),
+    };
+
+    // Add modifier keys if specified
+    const modifiers: number =
+      (params.modifiers?.includes('alt') ? 1 : 0) +
+      (params.modifiers?.includes('ctrl') ? 2 : 0) +
+      (params.modifiers?.includes('meta') ? 4 : 0) +
+      (params.modifiers?.includes('shift') ? 8 : 0);
+
+    // Send rawKeyDown event (more reliable than keyDown for special keys)
+    await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+      type: 'rawKeyDown',
+      ...baseParams,
+      modifiers,
+    });
+
+    // Small delay between down and up
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    // For Enter/Space, also send a char event
+    if (keyInfo.text) {
+      await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+        type: 'char',
+        ...baseParams,
+        modifiers,
+      });
+    }
+
+    // Send keyUp event
+    await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      ...baseParams,
+      modifiers,
+    });
+
+    console.log('[press_key] Successfully pressed', key);
+
+    return {
+      success: true,
+      result: {
+        pressed: true,
+        key,
+        code: keyInfo.code,
+        keyCode: keyInfo.keyCode,
+        method: 'cdp',
+        note: 'Key pressed via Chrome DevTools Protocol',
+      },
+    };
+  } catch (error) {
+    console.error('[press_key] Error:', error);
+    return {
+      success: false,
+      error: `press_key failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  } finally {
+    // Always detach debugger
+    try {
+      await chrome.debugger.detach(target);
+      console.log('[press_key] Debugger detached');
+    } catch {
+      // Ignore detach errors
+    }
+  }
+}
+
+/**
+ * Click at specific x,y coordinates using Chrome DevTools Protocol (CDP)
+ * Used as fallback when DOM-based clicking fails (canvas, shadow DOM, anti-bot sites)
+ * Coordinates are obtained from vision AI model
+ */
+async function clickAtCoordinates(params: BrowserActionParams): Promise<CommandResult> {
+  let x = params.x;
+  let y = params.y;
+
+  if (typeof x !== 'number' || typeof y !== 'number') {
+    return { success: false, error: 'click_at requires x and y coordinate parameters' };
+  }
+
+  // Get target tab
+  let tabId: number | undefined = params.targetId
+    ? typeof params.targetId === 'string'
+      ? parseInt(params.targetId, 10)
+      : params.targetId
+    : undefined;
+
+  if (!tabId || isNaN(tabId)) {
+    const [activeTab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    tabId = activeTab?.id;
+  }
+
+  if (!tabId) {
+    return { success: false, error: 'No tab for click_at' };
+  }
+
+  // Resolution-agnostic coordinate conversion:
+  // If screenshot dimensions provided, convert to ratios then to viewport coords
+  // This works regardless of DPR or screen resolution
+  const screenshotWidth = params.screenshotWidth;
+  const screenshotHeight = params.screenshotHeight;
+
+  if (screenshotWidth && screenshotHeight) {
+    try {
+      const viewportResults = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => ({ w: window.innerWidth, h: window.innerHeight }),
+      });
+      const viewport = viewportResults[0]?.result;
+      if (viewport) {
+        const xRatio = x / screenshotWidth;
+        const yRatio = y / screenshotHeight;
+        const newX = Math.round(xRatio * viewport.w);
+        const newY = Math.round(yRatio * viewport.h);
+        console.log(`[click_at] Resolution agnostic: (${x},${y}) in ${screenshotWidth}x${screenshotHeight} -> ratio (${xRatio.toFixed(3)},${yRatio.toFixed(3)}) -> viewport (${newX},${newY}) in ${viewport.w}x${viewport.h}`);
+        x = newX;
+        y = newY;
+      }
+    } catch (e) {
+      console.log('[click_at] Could not get viewport, falling back to DPR scaling');
+      // Fallback to DPR scaling
+      try {
+        const dprResults = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => window.devicePixelRatio || 1,
+        });
+        const dpr = dprResults[0]?.result || 1;
+        if (dpr > 1) {
+          x = Math.round(x / dpr);
+          y = Math.round(y / dpr);
+        }
+      } catch { /* ignore */ }
+    }
+  } else {
+    // No screenshot dimensions, try DPR scaling as fallback
+    try {
+      const dprResults = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => window.devicePixelRatio || 1,
+      });
+      const dpr = dprResults[0]?.result || 1;
+      if (dpr > 1) {
+        console.log(`[click_at] DPR fallback: (${x},${y}) / ${dpr} -> (${Math.round(x/dpr)},${Math.round(y/dpr)})`);
+        x = Math.round(x / dpr);
+        y = Math.round(y / dpr);
+      }
+    } catch (e) {
+      console.log('[click_at] Could not get DPR, using raw coordinates');
+    }
+  }
+
+  const target = { tabId };
+
+  // Use content script for shadow DOM sites (useContentScript=true) or when debugger unavailable
+  const useContentScript = params.useContentScript || !chrome.debugger;
+
+  if (useContentScript) {
+    console.log('[click_at] Using content script method (shadow DOM compatible)');
+    const clickCount = params.count || 1;
+    const clickDelay = params.delay || 0;
+
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: (clickX: number, clickY: number, count: number, delay: number) => {
+          const element = document.elementFromPoint(clickX, clickY);
+          if (!element) {
+            return { clicked: false, error: 'No element at coordinates' };
+          }
+
+          const startTime = performance.now();
+          let clicked = 0;
+
+          const doClick = () => {
+            // Dispatch full mouse event sequence
+            const mousedown = new MouseEvent('mousedown', {
+              bubbles: true,
+              cancelable: true,
+              clientX: clickX,
+              clientY: clickY,
+              view: window,
+              button: 0,
+            });
+            const mouseup = new MouseEvent('mouseup', {
+              bubbles: true,
+              cancelable: true,
+              clientX: clickX,
+              clientY: clickY,
+              view: window,
+              button: 0,
+            });
+            const click = new MouseEvent('click', {
+              bubbles: true,
+              cancelable: true,
+              clientX: clickX,
+              clientY: clickY,
+              view: window,
+              button: 0,
+            });
+
+            element.dispatchEvent(mousedown);
+            element.dispatchEvent(mouseup);
+            element.dispatchEvent(click);
+
+            // Also try native click
+            if (element instanceof HTMLElement) {
+              element.click();
+            }
+            clicked++;
+          };
+
+          // Rapid clicking
+          if (delay > 0) {
+            // With delay - use sync loop with blocking
+            for (let i = 0; i < count; i++) {
+              doClick();
+              if (i < count - 1) {
+                const end = performance.now() + delay;
+                while (performance.now() < end) { /* busy wait */ }
+              }
+            }
+          } else {
+            // No delay - as fast as possible
+            for (let i = 0; i < count; i++) {
+              doClick();
+            }
+          }
+
+          const elapsed = performance.now() - startTime;
+          return {
+            clicked: true,
+            count: clicked,
+            element: element.tagName,
+            elapsedMs: elapsed,
+          };
+        },
+        args: [x, y, clickCount, clickDelay],
+      });
+
+      const result = results[0]?.result as { clicked: boolean; count?: number; element?: string; elapsedMs?: number; error?: string } | undefined;
+      if (result?.clicked) {
+        return {
+          success: true,
+          result: { ...result, x, y, method: 'content-script' },
+        };
+      }
+      return { success: false, error: result?.error || 'Content script click failed' };
+    } catch (err) {
+      return { success: false, error: `Content script click failed: ${err}` };
+    }
+  }
+
+  // Support rapid clicking with count parameter
+  const clickCount = params.count || 1;
+  const clickDelay = params.delay || 0; // ms between clicks
+  const startTime = performance.now();
+
+  try {
+    // Attach debugger to tab
+    await chrome.debugger.attach(target, '1.3');
+    console.log('[click_at] Debugger attached to tab', tabId);
+
+    // Mouse move to coordinates
+    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x,
+      y,
+    });
+
+    // Small delay for hover effect
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    // Perform clicks (supports rapid clicking)
+    for (let i = 0; i < clickCount; i++) {
+      // Mouse down
+      await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+        type: 'mousePressed',
+        x,
+        y,
+        button: params.button || 'left',
+        clickCount: params.doubleClick ? 2 : 1,
+      });
+
+      // Mouse up
+      await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x,
+        y,
+        button: params.button || 'left',
+        clickCount: params.doubleClick ? 2 : 1,
+      });
+
+      // Delay between clicks if specified
+      if (clickDelay > 0 && i < clickCount - 1) {
+        await new Promise(resolve => setTimeout(resolve, clickDelay));
+      }
+    }
+
+    const elapsed = performance.now() - startTime;
+    console.log(`[click_at] Successfully clicked ${clickCount}x at (${x},${y}) in ${elapsed.toFixed(0)}ms`);
+
+    return {
+      success: true,
+      result: {
+        clicked: true,
+        count: clickCount,
+        x,
+        y,
+        elapsedMs: elapsed,
+        method: 'cdp',
+        note: clickCount > 1 ? `Rapid clicked ${clickCount}x via CDP` : 'Clicked via Chrome DevTools Protocol at coordinates',
+      },
+    };
+  } catch (error) {
+    console.error('[click_at] Error:', error);
+    return {
+      success: false,
+      error: `click_at failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  } finally {
+    // Always detach debugger
+    try {
+      await chrome.debugger.detach(target);
+      console.log('[click_at] Debugger detached');
+    } catch {
+      // Ignore detach errors
+    }
+  }
+}
+
+/**
+ * Type at specific coordinates - click first, then type
+ * Used for canvas-based input fields that vision AI located
+ *
+ * For shadow DOM sites (TikTok, etc.), use useContentScript=true to bypass CDP
+ * which doesn't work on shadow DOM elements
+ */
+async function typeAtCoordinates(params: BrowserActionParams): Promise<CommandResult> {
+  let x = params.x;
+  let y = params.y;
+  const text = params.text;
+  const useContentScript = params.useContentScript || false;
+
+  if (typeof x !== 'number' || typeof y !== 'number') {
+    return { success: false, error: 'type_at requires x and y coordinate parameters' };
+  }
+  if (!text) {
+    return { success: false, error: 'type_at requires text parameter' };
+  }
+
+  // Get target tab
+  let tabId: number | undefined = params.targetId
+    ? typeof params.targetId === 'string'
+      ? parseInt(params.targetId, 10)
+      : params.targetId
+    : undefined;
+
+  if (!tabId || isNaN(tabId)) {
+    const [activeTab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    tabId = activeTab?.id;
+  }
+
+  if (!tabId) {
+    return { success: false, error: 'No tab for type_at' };
+  }
+
+  // Resolution-agnostic coordinate conversion (same as click_at)
+  const screenshotWidth = params.screenshotWidth;
+  const screenshotHeight = params.screenshotHeight;
+
+  if (screenshotWidth && screenshotHeight) {
+    try {
+      const viewportResults = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => ({ w: window.innerWidth, h: window.innerHeight }),
+      });
+      const viewport = viewportResults[0]?.result;
+      if (viewport) {
+        const xRatio = x / screenshotWidth;
+        const yRatio = y / screenshotHeight;
+        const newX = Math.round(xRatio * viewport.w);
+        const newY = Math.round(yRatio * viewport.h);
+        console.log(`[type_at] Resolution agnostic: (${x},${y}) in ${screenshotWidth}x${screenshotHeight} -> (${newX},${newY}) in ${viewport.w}x${viewport.h}`);
+        x = newX;
+        y = newY;
+      }
+    } catch (e) {
+      console.log('[type_at] Could not get viewport for coordinate conversion');
+    }
+  }
+
+  // For shadow DOM sites OR if debugger not available, use content script
+  // Content script uses execCommand which works on contenteditable in shadow DOM
+  if (useContentScript || !chrome.debugger) {
+    console.log('[type_at] Using content script method (shadow DOM compatible)');
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: (clickX: number, clickY: number, inputText: string) => {
+          // Click at coordinates first
+          const element = document.elementFromPoint(clickX, clickY) as HTMLElement;
+          if (!element) {
+            return { typed: false, error: 'No element at coordinates' };
+          }
+
+          // Focus the element
+          element.click();
+          element.focus();
+
+          // Small delay
+          return new Promise(resolve => {
+            setTimeout(() => {
+              // Try to type - check if it's an input/textarea
+              const activeEl = document.activeElement as HTMLInputElement | HTMLTextAreaElement;
+              if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
+                activeEl.value = inputText;
+                activeEl.dispatchEvent(new Event('input', { bubbles: true }));
+                activeEl.dispatchEvent(new Event('change', { bubbles: true }));
+                resolve({ typed: true, element: activeEl.tagName, method: 'value' });
+              } else if (activeEl && activeEl.isContentEditable) {
+                // Use execCommand for contenteditable (works on shadow DOM)
+                // First place cursor at end, then insert text
+                const selection = window.getSelection();
+                if (selection) {
+                  selection.selectAllChildren(activeEl);
+                  selection.collapseToEnd();
+                }
+                const inserted = document.execCommand('insertText', false, inputText);
+                activeEl.dispatchEvent(new InputEvent('input', { bubbles: true, data: inputText, inputType: 'insertText' }));
+                resolve({ typed: inserted, element: 'contenteditable', method: 'execCommand', text: inputText });
+              } else {
+                // Fallback: find contenteditable in ancestors
+                let editableEl: HTMLElement | null = element;
+                while (editableEl && !editableEl.isContentEditable) {
+                  editableEl = editableEl.parentElement;
+                }
+                if (editableEl && editableEl.isContentEditable) {
+                  editableEl.focus();
+                  const selection = window.getSelection();
+                  if (selection) {
+                    selection.selectAllChildren(editableEl);
+                    selection.collapseToEnd();
+                  }
+                  const inserted = document.execCommand('insertText', false, inputText);
+                  editableEl.dispatchEvent(new InputEvent('input', { bubbles: true, data: inputText, inputType: 'insertText' }));
+                  resolve({ typed: inserted, element: 'contenteditable-ancestor', method: 'execCommand', text: inputText });
+                } else {
+                  // Last resort: try execCommand on document anyway
+                  const inserted = document.execCommand('insertText', false, inputText);
+                  if (inserted) {
+                    resolve({ typed: true, element: 'document', method: 'execCommand-fallback', text: inputText });
+                  } else {
+                    resolve({ typed: false, element: element.tagName, method: 'failed', error: 'No editable element found' });
+                  }
+                }
+              }
+            }, 100);
+          });
+        },
+        args: [x, y, text],
+      });
+      const result = results[0]?.result as { typed: boolean; element?: string; method?: string; error?: string; text?: string } | undefined;
+      if (result?.typed) {
+        return { success: true, result: { ...result, x, y, viewportCoords: true } };
+      }
+      return { success: false, error: result?.error || 'Content script type_at failed' };
+    } catch (err) {
+      return { success: false, error: `Content script type_at failed: ${err}` };
+    }
+  }
+
+  // CDP path (for simple sites without shadow DOM)
+  // First click to focus the element
+  const clickResult = await clickAtCoordinates({ ...params, x, y, doubleClick: false });
+  if (!clickResult.success) {
+    return clickResult;
+  }
+
+  // Small delay for focus
+  await new Promise(resolve => setTimeout(resolve, 100));
+
+  // Then type using type_raw
+  return await typeRawViaDebugger({ ...params });
 }
 
 /**
@@ -323,25 +1142,17 @@ async function executeEvaluate(params: BrowserActionParams): Promise<CommandResu
   }
 
   try {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: (fnString: string) => {
-        try {
-          // eslint-disable-next-line no-eval
-          const result = eval(fnString);
-          return { success: true, result };
-        } catch (error) {
-          return { success: false, error: String(error) };
-        }
-      },
-      args: [params.fn],
+    // Use content script to evaluate - it can inject script into page context
+    const response = await chrome.tabs.sendMessage(tabId, {
+      type: 'EVALUATE',
+      payload: { fn: params.fn },
     });
 
-    if (!results || results.length === 0) {
-      return { success: false, error: 'Failed to evaluate' };
+    if (response?.success) {
+      return { success: true, result: response.result };
+    } else {
+      return { success: false, error: response?.error || 'Evaluate failed' };
     }
-
-    return results[0].result as CommandResult;
   } catch (error) {
     return { success: false, error: String(error) };
   }
@@ -510,6 +1321,37 @@ async function takeScreenshot(
     quality: format === 'jpeg' ? quality : undefined,
   });
 
+  // Get screenshot dimensions from the PNG/JPEG itself
+  // This is resolution-agnostic - no page access needed
+  let screenshotWidth = 0;
+  let screenshotHeight = 0;
+  try {
+    const base64 = dataUrl.split(',')[1];
+    const binary = atob(base64);
+
+    if (format === 'png') {
+      // PNG: dimensions at bytes 16-23 (IHDR chunk)
+      // Width: bytes 16-19, Height: bytes 20-23 (big-endian)
+      screenshotWidth = (binary.charCodeAt(16) << 24) | (binary.charCodeAt(17) << 16) |
+                        (binary.charCodeAt(18) << 8) | binary.charCodeAt(19);
+      screenshotHeight = (binary.charCodeAt(20) << 24) | (binary.charCodeAt(21) << 16) |
+                         (binary.charCodeAt(22) << 8) | binary.charCodeAt(23);
+    } else {
+      // JPEG: need to parse markers - simplified approach
+      // Look for SOF0 marker (0xFF 0xC0) which contains dimensions
+      for (let i = 0; i < binary.length - 10; i++) {
+        if (binary.charCodeAt(i) === 0xFF && binary.charCodeAt(i + 1) === 0xC0) {
+          screenshotHeight = (binary.charCodeAt(i + 5) << 8) | binary.charCodeAt(i + 6);
+          screenshotWidth = (binary.charCodeAt(i + 7) << 8) | binary.charCodeAt(i + 8);
+          break;
+        }
+      }
+    }
+    console.log(`[screenshot] Decoded dimensions: ${screenshotWidth}x${screenshotHeight}`);
+  } catch (e) {
+    console.log('[screenshot] Could not decode dimensions:', e);
+  }
+
   return {
     success: true,
     result: {
@@ -518,6 +1360,8 @@ async function takeScreenshot(
       tabId,
       url: tab.url,
       title: tab.title,
+      // Include dimensions for resolution-agnostic coordinate conversion
+      ...(screenshotWidth && screenshotHeight ? { screenshotWidth, screenshotHeight } : {}),
     },
   };
 }

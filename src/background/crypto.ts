@@ -3,36 +3,11 @@
  * Similar to platform-client's device signing
  */
 import * as ed from '@noble/ed25519';
+import { sha512 } from '@noble/hashes/sha2.js';
 
-// Use synchronous SHA-512 from Web Crypto
-ed.etc.sha512Sync = (...messages: Uint8Array[]): Uint8Array => {
-  const merged = new Uint8Array(messages.reduce((acc, m) => acc + m.length, 0));
-  let offset = 0;
-  for (const m of messages) {
-    merged.set(m, offset);
-    offset += m.length;
-  }
-  // Use crypto.subtle for SHA-512
-  // Note: This is async, but we'll handle it in the caller
-  throw new Error('Use async methods');
-};
-
-// Async SHA-512 using Web Crypto
-async function sha512(message: Uint8Array): Promise<Uint8Array> {
-  const hash = await crypto.subtle.digest('SHA-512', message);
-  return new Uint8Array(hash);
-}
-
-// Configure ed25519 to use async SHA-512
-ed.etc.sha512Async = async (...messages: Uint8Array[]): Promise<Uint8Array> => {
-  const merged = new Uint8Array(messages.reduce((acc, m) => acc + m.length, 0));
-  let offset = 0;
-  for (const m of messages) {
-    merged.set(m, offset);
-    offset += m.length;
-  }
-  return sha512(merged);
-};
+// Configure ed25519 to use sha512 from @noble/hashes (v3 API)
+ed.hashes.sha512 = (...m: Uint8Array[]) => sha512(ed.etc.concatBytes(...m));
+ed.hashes.sha512Async = (...m: Uint8Array[]) => Promise.resolve(sha512(ed.etc.concatBytes(...m)));
 
 const STORAGE_KEY_PRIVATE = 'signingPrivateKey';
 const STORAGE_KEY_PUBLIC = 'signingPublicKey';
@@ -95,8 +70,8 @@ export async function ensureSigningKey(): Promise<SigningKeyInfo> {
     };
   }
 
-  // Generate new keypair
-  const privateKey = ed.utils.randomPrivateKey();
+  // Generate new keypair (Ed25519 private key is 32 random bytes)
+  const privateKey = crypto.getRandomValues(new Uint8Array(32));
   const publicKey = await ed.getPublicKeyAsync(privateKey);
 
   const privateKeyB64 = bytesToBase64(privateKey);

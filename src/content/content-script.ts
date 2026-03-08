@@ -49,6 +49,33 @@ chrome.runtime.onMessage.addListener(
       return true;
     }
 
+    if (message.type === 'EVALUATE') {
+      const payload = message.payload as { fn: string };
+      try {
+        // Inject script into page context to bypass CSP
+        const script = document.createElement('script');
+        const resultId = `__clawku_eval_${Date.now()}`;
+        script.textContent = `
+          try {
+            window['${resultId}'] = { success: true, result: eval(${JSON.stringify(payload.fn)}) };
+          } catch (e) {
+            window['${resultId}'] = { success: false, error: String(e) };
+          }
+        `;
+        document.documentElement.appendChild(script);
+        script.remove();
+
+        // Get result from window
+        const result = (window as unknown as Record<string, unknown>)[resultId] as { success: boolean; result?: unknown; error?: string };
+        delete (window as unknown as Record<string, unknown>)[resultId];
+
+        sendResponse(result || { success: false, error: 'No result' });
+      } catch (error) {
+        sendResponse({ success: false, error: String(error) });
+      }
+      return true;
+    }
+
     return false;
   }
 );
@@ -62,6 +89,10 @@ async function executeAction(
   switch (action) {
     case 'click':
       return await performClick(params);
+    case 'rapidClick':
+      return await performRapidClick(params);
+    case 'clickAll':
+      return await performClickAll(params);
     case 'type':
       return await performType(params);
     case 'press':
@@ -74,9 +105,151 @@ async function executeAction(
       return await performSelect(params);
     case 'drag':
       return await performDrag(params);
+    case 'click_send_button':
+      return await performClickSendButton(params);
+    case 'find_comment_input':
+      return await performFindCommentInput(params);
     default:
       return { success: false, error: `Unknown action: ${action}` };
   }
+}
+
+/**
+ * Click the send button (TikTok, Instagram, etc.)
+ */
+async function performClickSendButton(
+  _params: BrowserActionParams
+): Promise<ContentScriptResponse> {
+  const sendButton = findTikTokSendButton();
+  if (!sendButton) {
+    return { success: false, error: 'Send button not found' };
+  }
+
+  // Scroll into view
+  sendButton.scrollIntoView({ behavior: 'instant', block: 'center' });
+  await sleep(50);
+
+  // Click the send button
+  const rect = sendButton.getBoundingClientRect();
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+
+  const mousedown = new MouseEvent('mousedown', {
+    bubbles: true,
+    cancelable: true,
+    view: window,
+    clientX: x,
+    clientY: y,
+    button: 0,
+  });
+
+  const mouseup = new MouseEvent('mouseup', {
+    bubbles: true,
+    cancelable: true,
+    view: window,
+    clientX: x,
+    clientY: y,
+    button: 0,
+  });
+
+  const click = new MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+    view: window,
+    clientX: x,
+    clientY: y,
+    button: 0,
+  });
+
+  sendButton.dispatchEvent(mousedown);
+  sendButton.dispatchEvent(mouseup);
+  sendButton.dispatchEvent(click);
+
+  if (sendButton instanceof HTMLElement) {
+    sendButton.click();
+  }
+
+  return {
+    success: true,
+    result: { clicked: true, tagName: sendButton.tagName, type: 'send_button' },
+  };
+}
+
+/**
+ * Find and focus the comment input field
+ */
+async function performFindCommentInput(
+  _params: BrowserActionParams
+): Promise<ContentScriptResponse> {
+  const url = window.location.hostname;
+
+  let commentInput: Element | null = null;
+
+  if (url.includes('tiktok.com')) {
+    const selectors = [
+      '[data-e2e="comment-input"]',
+      '[data-e2e*="comment"] [contenteditable="true"]',
+      'div[contenteditable="true"][data-placeholder*="comment" i]',
+      'div[contenteditable="true"][data-placeholder*="Comment" i]',
+      'div[contenteditable="true"][data-placeholder*="Add comment" i]',
+      'div[contenteditable="true"][data-placeholder*="Say something" i]',
+      '.tiktok-live-chat-input [contenteditable="true"]',
+      'div[class*="CommentInput"] [contenteditable="true"]',
+      'div[class*="comment-input"] [contenteditable="true"]',
+      'div[class*="ChatInput"] [contenteditable="true"]',
+      'div[class*="DivInputContainer"] [contenteditable="true"]',
+      '[contenteditable="true"]:not([style*="display: none"])',
+    ];
+
+    for (const sel of selectors) {
+      try {
+        const el = document.querySelector(sel);
+        if (el) {
+          const rect = el.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            commentInput = el;
+            console.log(`[ContentScript] Found comment input: ${sel}`);
+            break;
+          }
+        }
+      } catch {
+        // Invalid selector
+      }
+    }
+  }
+
+  if (!commentInput) {
+    // Generic fallback
+    commentInput = document.querySelector('[contenteditable="true"]');
+  }
+
+  if (!commentInput) {
+    return { success: false, error: 'Comment input not found' };
+  }
+
+  // Focus the element
+  if (commentInput instanceof HTMLElement) {
+    commentInput.scrollIntoView({ behavior: 'instant', block: 'center' });
+    await sleep(50);
+    commentInput.focus();
+    commentInput.click();
+  }
+
+  // Get position for CDP-based actions
+  const rect = commentInput.getBoundingClientRect();
+
+  return {
+    success: true,
+    result: {
+      found: true,
+      tagName: commentInput.tagName,
+      isContentEditable: (commentInput as HTMLElement).isContentEditable,
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+      width: rect.width,
+      height: rect.height,
+    },
+  };
 }
 
 function findElement(params: BrowserActionParams): Element | null {
@@ -85,8 +258,184 @@ function findElement(params: BrowserActionParams): Element | null {
     return elementRefs.get(params.ref) || null;
   }
 
-  // TODO: Add more selectors (CSS selector, XPath, text content)
+  // Find by CSS selector
+  if (params.selector) {
+    const el = document.querySelector(params.selector);
+    if (el) return el;
+    console.log(`[ContentScript] Selector "${params.selector}" not found, will try fallbacks...`);
+  }
+
+  // Find by XPath
+  if (params.xpath) {
+    const result = document.evaluate(params.xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+    return result.singleNodeValue as Element | null;
+  }
+
+  // Find by text content
+  if (params.text) {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (node.textContent?.includes(params.text)) {
+        return node.parentElement;
+      }
+    }
+  }
+
+  // If ref/selector not found, try to find by aria-label or common patterns
+  if (params.ref || params.selector) {
+    console.log(`[ContentScript] Element not found (ref=${params.ref}, selector=${params.selector}), trying fallback selectors...`);
+
+    // Detect site and use site-specific selectors
+    const url = window.location.hostname;
+    let siteSelectors: string[] = [];
+
+    if (url.includes('tiktok.com')) {
+      console.log(`[ContentScript] Detected TikTok, using TikTok-specific selectors`);
+
+      // Check if looking for comment input
+      const isCommentInput = params.selector?.toLowerCase().includes('comment') ||
+        params.ref?.toLowerCase().includes('comment') ||
+        params.text !== undefined; // If we're trying to type, likely comment input
+
+      if (isCommentInput) {
+        siteSelectors = [
+          // TikTok Live comment input - contenteditable div
+          '[data-e2e="comment-input"]',
+          '[data-e2e*="comment"] [contenteditable="true"]',
+          'div[contenteditable="true"][data-placeholder*="comment" i]',
+          'div[contenteditable="true"][data-placeholder*="Comment" i]',
+          'div[contenteditable="true"][data-placeholder*="Add comment" i]',
+          'div[contenteditable="true"][data-placeholder*="Say something" i]',
+          // More generic TikTok comment field
+          '.tiktok-live-chat-input [contenteditable="true"]',
+          'div[class*="CommentInput"] [contenteditable="true"]',
+          'div[class*="comment-input"] [contenteditable="true"]',
+          'div[class*="ChatInput"] [contenteditable="true"]',
+          'div[class*="DivInputContainer"] [contenteditable="true"]',
+          // Fallback: any visible contenteditable
+          '[contenteditable="true"]:not([style*="display: none"])',
+        ];
+      } else {
+        siteSelectors = [
+          // TikTok Live like button - the heart icon container
+          'div[class*="DivLikeWrapper"] button',
+          'div[class*="like"] button',
+          'div[class*="Like"] button',
+          // The clickable div with cursor-pointer (heart button)
+          'div[aria-haspopup="dialog"]:not(.hidden) div.cursor-pointer',
+          'div.cursor-pointer:has(svg)',
+          // SVG heart icon
+          'svg[viewBox="0 0 48 48"]',
+          'path[d*="M24 9.44"]', // The heart path
+          // Generic TikTok
+          '[data-e2e="like-icon"]',
+          '[data-e2e*="like"]',
+        ];
+      }
+    } else if (url.includes('instagram.com')) {
+      siteSelectors = [
+        'svg[aria-label="Like"]',
+        'span[class*="like"]',
+        '[aria-label*="Like"]',
+      ];
+    }
+
+    // Add generic selectors
+    const genericSelectors = [
+      '[aria-label*="like" i]',
+      '[aria-label*="Like"]',
+      'button[aria-label*="like" i]',
+      '[data-testid*="like"]',
+      '.like-button',
+      '.like-btn',
+    ];
+
+    const allSelectors = [...siteSelectors, ...genericSelectors];
+
+    for (const sel of allSelectors) {
+      try {
+        const el = document.querySelector(sel);
+        if (el) {
+          console.log(`[ContentScript] Found element via fallback selector: ${sel}`);
+          return el;
+        }
+      } catch {
+        // Invalid selector, skip
+      }
+    }
+
+    console.log(`[ContentScript] No fallback selector matched`);
+  }
+
   return null;
+}
+
+/**
+ * Find TikTok send button near the comment input
+ */
+function findTikTokSendButton(): Element | null {
+  const selectors = [
+    // TikTok Live send button
+    '[data-e2e="comment-send-button"]',
+    '[data-e2e*="send"]',
+    'div[class*="SendButton"]',
+    'button[class*="SendButton"]',
+    'div[class*="DivSendButton"]',
+    // Button near comment input with send icon
+    'div[class*="CommentInput"] button',
+    'div[class*="comment-input"] button',
+    'div[class*="ChatInput"] button',
+    // SVG send icon button
+    'button:has(svg[class*="send" i])',
+    'div:has(svg[class*="send" i])',
+    // Aria labels
+    '[aria-label*="Send" i]',
+    '[aria-label*="Post" i]',
+    '[aria-label*="Submit" i]',
+  ];
+
+  for (const sel of selectors) {
+    try {
+      const el = document.querySelector(sel);
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        // Only return if visible
+        if (rect.width > 0 && rect.height > 0) {
+          console.log(`[ContentScript] Found TikTok send button: ${sel}`);
+          return el;
+        }
+      }
+    } catch {
+      // Invalid selector, skip
+    }
+  }
+
+  // Fallback: Look for any clickable element near a contenteditable
+  const contentEditable = document.querySelector('[contenteditable="true"]');
+  if (contentEditable) {
+    const parent = contentEditable.closest('div[class*="Input"], div[class*="Chat"], div[class*="Comment"]');
+    if (parent) {
+      // Find button siblings
+      const buttons = parent.querySelectorAll('button, div[role="button"], [class*="Button"]');
+      for (const btn of buttons) {
+        const rect = btn.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0 && btn !== contentEditable) {
+          console.log(`[ContentScript] Found send button via parent search`);
+          return btn;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function findAllElements(params: BrowserActionParams): Element[] {
+  if (params.selector) {
+    return Array.from(document.querySelectorAll(params.selector));
+  }
+  return [];
 }
 
 async function performClick(
@@ -132,40 +481,218 @@ async function performClick(
   };
 }
 
-async function performType(
+async function performRapidClick(
   params: BrowserActionParams
 ): Promise<ContentScriptResponse> {
   const element = findElement(params);
   if (!element) {
-    // Try to use active element
-    const activeEl = document.activeElement;
-    if (
-      !activeEl ||
-      !(
-        activeEl instanceof HTMLInputElement ||
-        activeEl instanceof HTMLTextAreaElement
-      )
-    ) {
-      return { success: false, error: 'No input element found or focused' };
+    return { success: false, error: `Element not found for selector: ${params.selector || params.ref}` };
+  }
+
+  const count = params.count || 100;
+  const delay = params.delay || 0; // 0 = as fast as possible
+  let clicked = 0;
+
+  console.log(`[ContentScript] rapidClick starting: ${count} clicks, ${delay}ms delay`);
+  const startTime = performance.now();
+
+  // Scroll into view first
+  element.scrollIntoView({ behavior: 'instant', block: 'center' });
+
+  const rect = element.getBoundingClientRect();
+  const x = rect.left + rect.width / 2;
+  const y = rect.top + rect.height / 2;
+
+  for (let i = 0; i < count; i++) {
+    // Dispatch mousedown, mouseup, click sequence for maximum compatibility
+    const mousedown = new MouseEvent('mousedown', {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: x,
+      clientY: y,
+      button: 0,
+    });
+
+    const mouseup = new MouseEvent('mouseup', {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: x,
+      clientY: y,
+      button: 0,
+    });
+
+    const click = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: x,
+      clientY: y,
+      button: 0,
+    });
+
+    element.dispatchEvent(mousedown);
+    element.dispatchEvent(mouseup);
+    element.dispatchEvent(click);
+
+    if (element instanceof HTMLElement) {
+      element.click();
+    }
+
+    clicked++;
+
+    if (delay > 0) {
+      await sleep(delay);
     }
   }
 
-  const inputEl =
-    (element as HTMLInputElement | HTMLTextAreaElement) ||
-    (document.activeElement as HTMLInputElement | HTMLTextAreaElement);
+  const elapsed = performance.now() - startTime;
+  console.log(`[ContentScript] rapidClick done: ${clicked} clicks in ${elapsed.toFixed(0)}ms (${(clicked / (elapsed / 1000)).toFixed(0)} clicks/sec)`);
 
-  if (
-    !(inputEl instanceof HTMLInputElement) &&
-    !(inputEl instanceof HTMLTextAreaElement)
-  ) {
-    return { success: false, error: 'Element is not an input' };
+  return {
+    success: true,
+    result: { rapidClicked: true, count: clicked, tagName: element.tagName, elapsedMs: elapsed },
+  };
+}
+
+async function performClickAll(
+  params: BrowserActionParams
+): Promise<ContentScriptResponse> {
+  const elements = findAllElements(params);
+  if (elements.length === 0) {
+    return { success: false, error: 'No elements found matching selector' };
   }
+
+  const delay = params.delay || 50; // Small delay between elements by default
+  let clicked = 0;
+
+  for (const element of elements) {
+    const rect = element.getBoundingClientRect();
+
+    // Skip if not visible
+    if (rect.width === 0 || rect.height === 0) continue;
+
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+
+    const click = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: x,
+      clientY: y,
+      button: 0,
+    });
+
+    element.dispatchEvent(click);
+
+    if (element instanceof HTMLElement) {
+      element.click();
+    }
+
+    clicked++;
+
+    if (delay > 0) {
+      await sleep(delay);
+    }
+  }
+
+  return {
+    success: true,
+    result: { clickedAll: true, count: clicked, total: elements.length },
+  };
+}
+
+async function performType(
+  params: BrowserActionParams
+): Promise<ContentScriptResponse> {
+  const element = findElement(params);
+  const activeEl = document.activeElement as HTMLElement;
+  const targetEl = element || activeEl;
+
+  if (!targetEl) {
+    return { success: false, error: 'No element found or focused' };
+  }
+
+  const text = params.text || '';
+
+  // Check if it's a contenteditable element
+  if (targetEl.isContentEditable || targetEl.getAttribute('contenteditable') === 'true') {
+    // Focus the element
+    targetEl.focus();
+    await sleep(50);
+
+    // Method 1: Try execCommand (works on many sites)
+    const success = document.execCommand('insertText', false, text);
+
+    if (!success) {
+      // Method 2: Use Selection API
+      const selection = window.getSelection();
+      if (selection) {
+        // Clear any existing selection
+        selection.removeAllRanges();
+
+        // Create a range at the end of the element
+        const range = document.createRange();
+        range.selectNodeContents(targetEl);
+        range.collapse(false); // Collapse to end
+        selection.addRange(range);
+
+        // Insert text node
+        const textNode = document.createTextNode(text);
+        range.insertNode(textNode);
+
+        // Move cursor after inserted text
+        range.setStartAfter(textNode);
+        range.setEndAfter(textNode);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+    }
+
+    // Dispatch input event to trigger React/Vue handlers
+    targetEl.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      cancelable: true,
+      data: text,
+      inputType: 'insertText'
+    }));
+
+    // Also dispatch textInput event (some frameworks use this)
+    const textInputEvent = new InputEvent('textInput', {
+      bubbles: true,
+      cancelable: true,
+      data: text,
+    });
+    targetEl.dispatchEvent(textInputEvent);
+
+    // Submit if requested
+    if (params.submit) {
+      targetEl.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true })
+      );
+      targetEl.dispatchEvent(
+        new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true })
+      );
+    }
+
+    return { success: true, result: { typed: text.length, method: 'contenteditable' } };
+  }
+
+  // Handle standard input/textarea elements
+  if (
+    !(targetEl instanceof HTMLInputElement) &&
+    !(targetEl instanceof HTMLTextAreaElement)
+  ) {
+    return { success: false, error: 'Element is not an input, textarea, or contenteditable' };
+  }
+
+  const inputEl = targetEl as HTMLInputElement | HTMLTextAreaElement;
 
   // Focus the element
   inputEl.focus();
   await sleep(50);
-
-  const text = params.text || '';
 
   if (params.slowly) {
     // Type character by character
@@ -196,7 +723,7 @@ async function performType(
     }
   }
 
-  return { success: true, result: { typed: text.length } };
+  return { success: true, result: { typed: text.length, method: 'input' } };
 }
 
 async function performKeyPress(

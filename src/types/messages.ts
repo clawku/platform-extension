@@ -15,11 +15,18 @@ export type BrowserAction =
   | 'act'
   // Direct actions (legacy support)
   | 'click'
+  | 'rapidClick'  // Click element N times as fast as possible
+  | 'clickAll'    // Click all elements matching selector
   | 'type'
+  | 'type_raw'  // CDP-based typing for anti-bot fields
   | 'press'
+  | 'press_key'  // CDP-based key press (e.g., Enter) for anti-bot submit
   | 'hover'
   | 'scroll'
   | 'select'
+  // TikTok/social media specific
+  | 'click_send_button'  // Click send button on comment fields
+  | 'find_comment_input'  // Find and focus comment input field
   // Unsupported actions (return helpful errors)
   | 'start'
   | 'stop'
@@ -32,7 +39,9 @@ export type BrowserAction =
 export type BrowserActKind =
   | 'click'
   | 'type'
+  | 'type_raw'  // CDP-based typing for anti-bot fields
   | 'press'
+  | 'press_key'  // CDP-based key press (e.g., Enter) for anti-bot submit
   | 'hover'
   | 'drag'
   | 'select'
@@ -41,7 +50,12 @@ export type BrowserActKind =
   | 'wait'
   | 'evaluate'
   | 'close'
-  | 'scroll';
+  | 'scroll'
+  | 'click_at'  // CDP click at x,y coordinates (vision fallback)
+  | 'type_at'   // CDP click + type at x,y coordinates (vision fallback)
+  // TikTok/social media specific
+  | 'click_send_button'  // Click send button on comment fields
+  | 'find_comment_input';  // Find and focus comment input field
 
 export interface BrowserJobPayload {
   jobId: string;
@@ -96,6 +110,15 @@ export interface BrowserActionParams {
   // Common
   targetId?: number; // Tab ID
   ref?: string; // Element reference from snapshot
+  xpath?: string; // XPath selector
+
+  // Rapid click
+  count?: number; // Number of clicks for rapidClick
+  delay?: number; // Delay between clicks in ms (0 = max speed)
+
+  // Coordinate-based actions (click_at, type_at) - for vision fallback
+  x?: number; // X coordinate in pixels
+  y?: number; // Y coordinate in pixels
 
   // open/navigate
   url?: string;
@@ -220,7 +243,7 @@ export interface ContentScriptResponse {
 
 // Popup messages to background
 export interface PopupMessage {
-  type: 'GET_STATUS' | 'PAIR' | 'DISCONNECT' | 'RECONNECT';
+  type: 'GET_STATUS' | 'PAIR' | 'DISCONNECT' | 'RECONNECT' | 'GET_ACTIVITIES' | 'CLEAR_ACTIVITIES';
   payload?: {
     code?: string;
     apiBaseUrl?: string;

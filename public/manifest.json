@@ -1,13 +1,17 @@
 {
   "manifest_version": 3,
-  "name": "Clawku - AI Browser Control",
-  "version": "1.0.0",
-  "description": "Let your AI assistant control your browser - navigate pages, click buttons, fill forms, and take screenshots through natural conversation.",
+  "name": "Clawku Browser Agent",
+  "version": "1.0.7",
+  "description": "Connect your browser with your Clawku AI agent for browser control",
   "permissions": [
     "tabs",
     "activeTab",
     "scripting",
-    "storage"
+    "storage",
+    "notifications",
+    "alarms",
+    "debugger",
+    "offscreen"
   ],
   "host_permissions": [
     "<all_urls>"

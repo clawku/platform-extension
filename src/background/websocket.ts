@@ -8,40 +8,61 @@ import { signMessage } from './crypto.js';
 
 type MessageHandler = (message: BrowserJobMessage) => void;
 
+const OFFSCREEN_DOCUMENT_PATH = 'offscreen/offscreen.html';
+
 class WebSocketConnection {
-  private ws: WebSocket | null = null;
-  private reconnectAttempts = 0;
-  private maxReconnectAttempts = 10;
-  private reconnectDelay = 1000;
   private messageHandler: MessageHandler | null = null;
   private storage: ExtensionStorage | null = null;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private pingInterval: ReturnType<typeof setInterval> | null = null;
-  private isManualConnect = false;
+  private offscreenCreated = false;
+  private _isConnected = false;
+
+  constructor() {
+    // Listen for messages from offscreen document
+    chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
+      if (message.type === 'WS_CONNECTED') {
+        console.log('[WebSocket] Offscreen reports connected');
+        this._isConnected = true;
+        this.updateBadge('connected');
+        chrome.storage.local.set({ wsConnected: true });
+      } else if (message.type === 'WS_DISCONNECTED') {
+        console.log('[WebSocket] Offscreen reports disconnected');
+        this._isConnected = false;
+        this.updateBadge('disconnected');
+        chrome.storage.local.set({ wsConnected: false });
+      } else if (message.type === 'WS_MESSAGE' && message.data) {
+        this.handleMessage(message.data);
+      } else if (message.type === 'WS_ERROR') {
+        this.updateBadge('error');
+      }
+      return false;
+    });
+  }
+
+  private async ensureOffscreenDocument(): Promise<void> {
+    if (this.offscreenCreated) return;
+
+    // Check if offscreen document already exists
+    const existingContexts = await chrome.runtime.getContexts({
+      contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
+      documentUrls: [chrome.runtime.getURL(OFFSCREEN_DOCUMENT_PATH)],
+    });
+
+    if (existingContexts.length > 0) {
+      this.offscreenCreated = true;
+      return;
+    }
+
+    // Create offscreen document - use BLOBS reason which allows network access
+    await chrome.offscreen.createDocument({
+      url: OFFSCREEN_DOCUMENT_PATH,
+      reasons: [chrome.offscreen.Reason.BLOBS],
+      justification: 'Maintain persistent WebSocket connection to Clawku server',
+    });
+    this.offscreenCreated = true;
+    console.log('[WebSocket] Offscreen document created');
+  }
 
   async connect(manual = false): Promise<boolean> {
-    // Track if this is a manual connect (user clicked reconnect)
-    this.isManualConnect = manual;
-
-    // For manual reconnects, reset attempts counter to allow retries
-    if (manual) {
-      this.reconnectAttempts = 0;
-      // Cancel any pending reconnect timer
-      if (this.reconnectTimer) {
-        clearTimeout(this.reconnectTimer);
-        this.reconnectTimer = null;
-      }
-    }
-
-    // Close existing connection if any
-    if (this.ws) {
-      this.cleanup();
-      if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
-        this.ws.close();
-      }
-      this.ws = null;
-    }
-
     // Load storage
     const result = await chrome.storage.local.get([
       'token',
@@ -56,74 +77,44 @@ class WebSocketConnection {
     }
 
     const wsUrl = this.storage.wsBaseUrl || 'wss://api.b.clawku.id';
-    const url = `${wsUrl}/browser/ws?token=${this.storage.token}`;
 
-    return new Promise((resolve) => {
-      let resolved = false;
-      const safeResolve = (value: boolean) => {
-        if (!resolved) {
-          resolved = true;
-          resolve(value);
-        }
-      };
-
-      try {
-        console.log('[WebSocket] Connecting to', wsUrl);
-        this.ws = new WebSocket(url);
-
-        this.ws.onopen = () => {
-          console.log('[WebSocket] Connected');
-          this.reconnectAttempts = 0;
-          this.isManualConnect = false;
-          this.startPing();
-          this.updateBadge('connected');
-          safeResolve(true);
-        };
-
-        this.ws.onmessage = (event) => {
-          this.handleMessage(event.data);
-        };
-
-        this.ws.onclose = (event) => {
-          console.log('[WebSocket] Closed:', event.code, event.reason);
-          this.cleanup();
-          this.updateBadge('disconnected');
-          // Always resolve the initial connect promise
-          safeResolve(false);
-          // Then schedule reconnect (only for auto-reconnects)
-          if (!this.isManualConnect) {
-            this.scheduleReconnect();
-          }
-        };
-
-        this.ws.onerror = (error) => {
-          console.error('[WebSocket] Error:', error);
-          this.updateBadge('error');
-        };
-      } catch (error) {
-        console.error('[WebSocket] Connection error:', error);
-        safeResolve(false);
-      }
-    });
-  }
-
-  private handleMessage(data: string) {
     try {
-      const message = JSON.parse(data) as WebSocketMessage;
-      console.log('[WebSocket] Received:', message.type);
+      await this.ensureOffscreenDocument();
 
-      if (message.type === 'browser.job' && this.messageHandler) {
-        this.messageHandler(message as BrowserJobMessage);
-      } else if (message.type === 'pong') {
-        // Heartbeat response
+      // Send connect message to offscreen document
+      const response = await chrome.runtime.sendMessage({
+        target: 'offscreen',
+        type: 'CONNECT',
+        wsUrl,
+        token: this.storage.token,
+      });
+
+      if (response?.success) {
+        this._isConnected = true;
+        this.updateBadge('connected');
+        return true;
+      } else {
+        console.error('[WebSocket] Offscreen connect failed:', response?.error);
+        return false;
       }
     } catch (error) {
-      console.error('[WebSocket] Failed to parse message:', error);
+      console.error('[WebSocket] Connection error:', error);
+      return false;
+    }
+  }
+
+  private handleMessage(data: WebSocketMessage) {
+    console.log('[WebSocket] Received:', data.type);
+
+    if (data.type === 'browser.job' && this.messageHandler) {
+      this.messageHandler(data as BrowserJobMessage);
+    } else if (data.type === 'pong') {
+      // Heartbeat response - offscreen handles ping/pong
     }
   }
 
   async sendResult(payload: BrowserResultPayload): Promise<boolean> {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    if (!this._isConnected) {
       console.error('[WebSocket] Cannot send - not connected');
       return false;
     }
@@ -138,100 +129,37 @@ class WebSocketConnection {
       const message = {
         type: 'browser.result',
         payload,
-        signature, // Ed25519 signature of the payload JSON
+        signature,
       };
 
-      this.ws.send(JSON.stringify(message));
-      console.log('[WebSocket] Sent signed result for job:', payload.jobId);
-      return true;
-    } catch (error) {
-      console.error('[WebSocket] Failed to sign message:', error);
-      // Fall back to unsigned message if signing fails
-      const message = {
-        type: 'browser.result',
-        payload,
-      };
-      this.ws.send(JSON.stringify(message));
-      console.log('[WebSocket] Sent unsigned result for job:', payload.jobId);
-      return true;
-    }
-  }
+      // Send via offscreen document
+      const response = await chrome.runtime.sendMessage({
+        target: 'offscreen',
+        type: 'SEND',
+        data: message,
+      });
 
-  private startPing() {
-    this.stopPing();
-    this.pingInterval = setInterval(async () => {
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        try {
-          const timestamp = Date.now();
-          const pingPayload = JSON.stringify({ timestamp });
-          const signature = await signMessage(pingPayload);
-          this.ws.send(JSON.stringify({
-            type: 'ping',
-            payload: { timestamp },
-            signature,
-          }));
-        } catch {
-          // Fall back to unsigned ping
-          this.ws.send(JSON.stringify({ type: 'ping' }));
-        }
+      if (response?.success) {
+        console.log('[WebSocket] Sent signed result for job:', payload.jobId);
+        return true;
       }
-    }, 30000); // Ping every 30 seconds
-  }
-
-  private stopPing() {
-    if (this.pingInterval) {
-      clearInterval(this.pingInterval);
-      this.pingInterval = null;
+      return false;
+    } catch (error) {
+      console.error('[WebSocket] Failed to send message:', error);
+      return false;
     }
   }
 
-  private cleanup() {
-    this.stopPing();
-    if (this.ws) {
-      this.ws.onopen = null;
-      this.ws.onmessage = null;
-      this.ws.onclose = null;
-      this.ws.onerror = null;
-      this.ws = null;
+  async disconnect(): Promise<void> {
+    try {
+      await chrome.runtime.sendMessage({
+        target: 'offscreen',
+        type: 'DISCONNECT',
+      });
+    } catch (e) {
+      // Offscreen might not exist
     }
-  }
-
-  private scheduleReconnect() {
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-    }
-
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.log('[WebSocket] Max reconnect attempts reached');
-      this.updateBadge('error');
-      return;
-    }
-
-    const delay = Math.min(
-      this.reconnectDelay * Math.pow(2, this.reconnectAttempts),
-      60000
-    );
-    this.reconnectAttempts++;
-
-    console.log(
-      `[WebSocket] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`
-    );
-
-    this.reconnectTimer = setTimeout(() => {
-      this.connect();
-    }, delay);
-  }
-
-  disconnect() {
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    this.reconnectAttempts = this.maxReconnectAttempts; // Prevent reconnect
-    this.cleanup();
-    if (this.ws) {
-      this.ws.close();
-    }
+    this._isConnected = false;
     this.updateBadge('disconnected');
   }
 
@@ -240,7 +168,7 @@ class WebSocketConnection {
   }
 
   isConnected(): boolean {
-    return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+    return this._isConnected;
   }
 
   private updateBadge(status: 'connected' | 'disconnected' | 'error') {

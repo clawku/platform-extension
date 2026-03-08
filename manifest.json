@@ -1,14 +1,17 @@
 {
   "manifest_version": 3,
   "name": "Clawku Browser Agent",
-  "version": "1.0.0",
+  "version": "1.0.6",
   "description": "Connect your browser with your Clawku AI agent for browser control",
   "permissions": [
     "tabs",
     "activeTab",
     "scripting",
     "storage",
-    "notifications"
+    "notifications",
+    "alarms",
+    "debugger",
+    "offscreen"
   ],
   "host_permissions": [
     "<all_urls>"

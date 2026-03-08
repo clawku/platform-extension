@@ -5,15 +5,77 @@ import type { BrowserJobMessage, PopupMessage } from '../types/messages.js';
 
 console.log('[ServiceWorker] Starting Clawku Browser Extension');
 
+// Activity log - store recent activities for debugging
+interface Activity {
+  id: string;
+  timestamp: number;
+  action: string;
+  status: 'pending' | 'success' | 'error';
+  details?: string;
+  error?: string;
+}
+
+const MAX_ACTIVITIES = 20;
+
+async function addActivity(activity: Omit<Activity, 'id' | 'timestamp'>): Promise<void> {
+  const { activities = [] } = await chrome.storage.local.get('activities');
+  const newActivity: Activity = {
+    ...activity,
+    id: Math.random().toString(36).slice(2),
+    timestamp: Date.now(),
+  };
+  activities.unshift(newActivity);
+  if (activities.length > MAX_ACTIVITIES) {
+    activities.length = MAX_ACTIVITIES;
+  }
+  await chrome.storage.local.set({ activities });
+}
+
+async function updateActivity(id: string, update: Partial<Activity>): Promise<void> {
+  const { activities = [] } = await chrome.storage.local.get('activities');
+  const idx = activities.findIndex((a: Activity) => a.id === id);
+  if (idx !== -1) {
+    activities[idx] = { ...activities[idx], ...update };
+    await chrome.storage.local.set({ activities });
+  }
+}
+
+// Keep-alive alarm to prevent service worker suspension during long operations
+chrome.alarms.create('keepAlive', { periodInMinutes: 0.33 }); // Every 20 seconds
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'keepAlive') {
+    // Just touch storage to keep service worker active
+    // Offscreen document handles WebSocket reconnection
+    chrome.storage.local.get(['wsConnected']).then(() => {
+      console.log('[ServiceWorker] Keep-alive tick, connected:', wsConnection.isConnected());
+    });
+  }
+});
+
 // Handle incoming browser jobs from WebSocket
 wsConnection.setMessageHandler(async (message: BrowserJobMessage) => {
   const { jobId, action, params, nonce, expiresAt } = message.payload;
 
   console.log('[ServiceWorker] Received job:', jobId, action);
 
+  // Add activity entry
+  const paramsStr = JSON.stringify(params).slice(0, 100);
+  await addActivity({
+    action,
+    status: 'pending',
+    details: paramsStr,
+  });
+
   // Check if job has expired
   if (Date.now() > expiresAt) {
     console.log('[ServiceWorker] Job expired:', jobId);
+    await addActivity({
+      action,
+      status: 'error',
+      details: paramsStr,
+      error: 'Job expired',
+    });
     const result = createResultPayload(jobId, nonce, {
       success: false,
       error: 'Job expired',
@@ -24,6 +86,19 @@ wsConnection.setMessageHandler(async (message: BrowserJobMessage) => {
 
   // Execute the command
   const commandResult = await executeCommand(action, params);
+
+  // Log result
+  const { activities = [] } = await chrome.storage.local.get('activities');
+  if (activities.length > 0) {
+    activities[0].status = commandResult.success ? 'success' : 'error';
+    if (!commandResult.success && commandResult.error) {
+      activities[0].error = commandResult.error;
+    }
+    if (commandResult.success && commandResult.result) {
+      activities[0].details = JSON.stringify(commandResult.result).slice(0, 100);
+    }
+    await chrome.storage.local.set({ activities });
+  }
 
   // Send result back
   const result = createResultPayload(jobId, nonce, commandResult);
@@ -102,6 +177,18 @@ chrome.runtime.onMessage.addListener((message: PopupMessage, sender, sendRespons
         const connected = await wsConnection.connect(true);
         await chrome.storage.local.set({ wsConnected: connected });
         sendResponse({ success: connected, error: connected ? undefined : 'Connection failed' });
+        break;
+      }
+
+      case 'GET_ACTIVITIES': {
+        const { activities = [] } = await chrome.storage.local.get('activities');
+        sendResponse({ activities });
+        break;
+      }
+
+      case 'CLEAR_ACTIVITIES': {
+        await chrome.storage.local.set({ activities: [] });
+        sendResponse({ success: true });
         break;
       }
 
