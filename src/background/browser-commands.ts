@@ -154,8 +154,8 @@ async function executeAct(params: BrowserActionParams): Promise<CommandResult> {
     case 'type_raw':
       return await typeRawViaDebugger(actParams);
     case 'press':
-      return await executeContentAction('press', actParams);
     case 'press_key':
+      // Both press and press_key use pressKeyViaDebugger which supports useContentScript for shadow DOM
       return await pressKeyViaDebugger(actParams);
     case 'hover':
       return await executeContentAction('hover', actParams);
@@ -398,11 +398,12 @@ const KEY_CODES: Record<string, { code: string; keyCode: number; text?: string }
 /**
  * Press a key using Chrome DevTools Protocol (CDP) via chrome.debugger API
  * This bypasses DOM-level event handling by sending keyboard events at browser level
- * Used for submitting forms on anti-bot sites like TikTok Live
+ * For shadow DOM sites like TikTok, use useContentScript=true
  */
 async function pressKeyViaDebugger(params: BrowserActionParams): Promise<CommandResult> {
   const key = params.key || 'Enter';
   const keyInfo = KEY_CODES[key] || { code: key, keyCode: key.charCodeAt(0) };
+  const useContentScript = params.useContentScript || false;
 
   // Get target tab
   let tabId: number | undefined = params.targetId
@@ -425,16 +426,19 @@ async function pressKeyViaDebugger(params: BrowserActionParams): Promise<Command
 
   const target = { tabId };
 
-  // Check if debugger API is available - if not, fallback to content script
-  if (!chrome.debugger) {
-    console.log('[press_key] chrome.debugger not available, using content script fallback');
+  // For shadow DOM sites OR if debugger not available, use content script
+  if (useContentScript || !chrome.debugger) {
+    console.log('[press_key] Using content script method');
     try {
       const results = await chrome.scripting.executeScript({
         target: { tabId },
         func: (keyName: string) => {
           const activeEl = document.activeElement || document.body;
 
-          // Dispatch keyboard events
+          // For Enter on contenteditable, we need to simulate what the browser does
+          // when user presses Enter - this varies by site
+
+          // First try: dispatch keyboard events
           const keydownEvent = new KeyboardEvent('keydown', {
             key: keyName,
             code: keyName,
@@ -465,6 +469,24 @@ async function pressKeyViaDebugger(params: BrowserActionParams): Promise<Command
           activeEl.dispatchEvent(keydownEvent);
           activeEl.dispatchEvent(keypressEvent);
           activeEl.dispatchEvent(keyupEvent);
+
+          // For TikTok, also try clicking any nearby send button
+          // Look for send buttons near the comment input
+          if (keyName === 'Enter') {
+            // Try finding send button by common patterns
+            const sendButtons = document.querySelectorAll(
+              '[data-e2e*="send"], [class*="send"], [class*="Send"], ' +
+              'button[type="submit"], [aria-label*="send"], [aria-label*="Send"], ' +
+              '[class*="submit"], [class*="Submit"]'
+            );
+            for (const btn of sendButtons) {
+              const rect = btn.getBoundingClientRect();
+              if (rect.width > 0 && rect.height > 0) {
+                (btn as HTMLElement).click();
+                return { pressed: true, key: keyName, method: 'content-script+button-click', button: (btn as HTMLElement).className };
+              }
+            }
+          }
 
           return { pressed: true, key: keyName, method: 'content-script' };
         },
@@ -887,10 +909,144 @@ async function typeAtCoordinates(params: BrowserActionParams): Promise<CommandRe
     }
   }
 
-  // For shadow DOM sites OR if debugger not available, use content script
-  // Content script uses execCommand which works on contenteditable in shadow DOM
-  if (useContentScript || !chrome.debugger) {
-    console.log('[type_at] Using content script method (shadow DOM compatible)');
+  // For shadow DOM sites, use HYBRID approach:
+  // 1. CDP click (trusted event, actually focuses the element)
+  // 2. Content script type (execCommand works on shadow DOM)
+  // This solves the issue where content script clicks (isTrusted=false) don't focus on TikTok
+  if (useContentScript) {
+    console.log('[type_at] Using hybrid CDP click + content script type (shadow DOM compatible)');
+
+    // Step 1: Click via CDP to focus (trusted event)
+    if (chrome.debugger) {
+      try {
+        const target = { tabId };
+        await chrome.debugger.attach(target, '1.3');
+        console.log('[type_at] CDP click to focus at', x, y);
+
+        // Mouse move first
+        await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+          type: 'mouseMoved',
+          x,
+          y,
+        });
+        await new Promise(resolve => setTimeout(resolve, 30));
+
+        // Mouse down + up = click
+        await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+          type: 'mousePressed',
+          x,
+          y,
+          button: 'left',
+          clickCount: 1,
+        });
+        await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+          type: 'mouseReleased',
+          x,
+          y,
+          button: 'left',
+          clickCount: 1,
+        });
+
+        await chrome.debugger.detach(target);
+        console.log('[type_at] CDP click done, waiting for focus');
+      } catch (e) {
+        console.log('[type_at] CDP click failed, falling back to content script click:', e);
+        // Continue with content script click as fallback
+      }
+    }
+
+    // Small delay for focus to take effect
+    await new Promise(resolve => setTimeout(resolve, 150));
+
+    // Step 2: Type via content script execCommand (works on shadow DOM)
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: (clickX: number, clickY: number, inputText: string) => {
+          // Check what's focused after CDP click
+          let activeEl = document.activeElement as HTMLInputElement | HTMLTextAreaElement | HTMLElement;
+
+          // If nothing focused or body focused, try clicking again with JS as fallback
+          if (!activeEl || activeEl === document.body || activeEl === document.documentElement) {
+            const element = document.elementFromPoint(clickX, clickY) as HTMLElement;
+            if (element) {
+              element.click();
+              element.focus();
+              activeEl = document.activeElement as HTMLElement;
+            }
+          }
+
+          // Small delay
+          return new Promise(resolve => {
+            setTimeout(() => {
+              activeEl = document.activeElement as HTMLInputElement | HTMLTextAreaElement | HTMLElement;
+
+              // Try to type - check if it's an input/textarea
+              if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
+                (activeEl as HTMLInputElement).value = inputText;
+                activeEl.dispatchEvent(new Event('input', { bubbles: true }));
+                activeEl.dispatchEvent(new Event('change', { bubbles: true }));
+                resolve({ typed: true, element: activeEl.tagName, method: 'value' });
+              } else if (activeEl && (activeEl as HTMLElement).isContentEditable) {
+                // Use execCommand for contenteditable (works on shadow DOM)
+                const selection = window.getSelection();
+                if (selection) {
+                  selection.selectAllChildren(activeEl);
+                  selection.collapseToEnd();
+                }
+                const inserted = document.execCommand('insertText', false, inputText);
+                activeEl.dispatchEvent(new InputEvent('input', { bubbles: true, data: inputText, inputType: 'insertText' }));
+                resolve({ typed: inserted, element: 'contenteditable', method: 'execCommand', text: inputText });
+              } else {
+                // Fallback: find contenteditable near click point or in ancestors
+                const clickedEl = document.elementFromPoint(clickX, clickY) as HTMLElement;
+                if (!clickedEl) {
+                  resolve({ typed: false, error: 'No element at coordinates' });
+                  return;
+                }
+
+                let editableEl: HTMLElement | null = clickedEl;
+                while (editableEl && !editableEl.isContentEditable) {
+                  editableEl = editableEl.parentElement;
+                }
+                if (editableEl && editableEl.isContentEditable) {
+                  editableEl.focus();
+                  const selection = window.getSelection();
+                  if (selection) {
+                    selection.selectAllChildren(editableEl);
+                    selection.collapseToEnd();
+                  }
+                  const inserted = document.execCommand('insertText', false, inputText);
+                  editableEl.dispatchEvent(new InputEvent('input', { bubbles: true, data: inputText, inputType: 'insertText' }));
+                  resolve({ typed: inserted, element: 'contenteditable-ancestor', method: 'execCommand', text: inputText });
+                } else {
+                  // Last resort: try execCommand on document anyway
+                  const inserted = document.execCommand('insertText', false, inputText);
+                  if (inserted) {
+                    resolve({ typed: true, element: 'document', method: 'execCommand-fallback', text: inputText });
+                  } else {
+                    resolve({ typed: false, element: clickedEl.tagName, method: 'failed', error: 'No editable element found' });
+                  }
+                }
+              }
+            }, 100);
+          });
+        },
+        args: [x, y, text],
+      });
+      const result = results[0]?.result as { typed: boolean; element?: string; method?: string; error?: string; text?: string } | undefined;
+      if (result?.typed) {
+        return { success: true, result: { ...result, x, y, viewportCoords: true, clickMethod: 'cdp' } };
+      }
+      return { success: false, error: result?.error || 'Content script type_at failed' };
+    } catch (err) {
+      return { success: false, error: `Content script type_at failed: ${err}` };
+    }
+  }
+
+  // For sites without shadow DOM, OR if debugger not available
+  if (!chrome.debugger) {
+    console.log('[type_at] Using content script method (no debugger)');
     try {
       const results = await chrome.scripting.executeScript({
         target: { tabId },
