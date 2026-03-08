@@ -1287,8 +1287,11 @@ async function navigateTab(params: BrowserActionParams): Promise<CommandResult> 
 async function takeScreenshot(
   params: BrowserActionParams
 ): Promise<CommandResult> {
-  const format = params.format || 'png';
-  const quality = params.quality || 90;
+  // Default: grayscale + compressed JPEG for vision (smaller file, accurate coords)
+  // Optional: fullColor=true for when agent needs color context
+  const fullColor = params.fullColor || false;
+  const format = fullColor ? (params.format || 'png') : 'jpeg';
+  const quality = params.quality || (fullColor ? 90 : 50); // Lower quality for vision
 
   // Get the target tab
   let tabId: number | undefined = params.targetId
@@ -1316,7 +1319,7 @@ async function takeScreenshot(
   }
 
   // Capture visible tab
-  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
+  let dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
     format: format as 'png' | 'jpeg',
     quality: format === 'jpeg' ? quality : undefined,
   });
@@ -1352,11 +1355,58 @@ async function takeScreenshot(
     console.log('[screenshot] Could not decode dimensions:', e);
   }
 
+  // Convert to grayscale for vision (default) - reduces file size significantly
+  // while preserving full resolution for accurate coordinates
+  if (!fullColor && screenshotWidth > 0 && screenshotHeight > 0) {
+    try {
+      // Use OffscreenCanvas to convert to grayscale
+      const offscreen = new OffscreenCanvas(screenshotWidth, screenshotHeight);
+      const ctx = offscreen.getContext('2d');
+      if (ctx) {
+        // Load image
+        const response = await fetch(dataUrl);
+        const blob = await response.blob();
+        const imageBitmap = await createImageBitmap(blob);
+
+        // Draw and convert to grayscale
+        ctx.drawImage(imageBitmap, 0, 0);
+        const imageData = ctx.getImageData(0, 0, screenshotWidth, screenshotHeight);
+        const data = imageData.data;
+
+        // Convert to grayscale using luminance formula
+        for (let i = 0; i < data.length; i += 4) {
+          const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+          data[i] = gray;     // R
+          data[i + 1] = gray; // G
+          data[i + 2] = gray; // B
+          // Alpha stays the same
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+
+        // Convert back to JPEG with compression
+        const grayBlob = await offscreen.convertToBlob({ type: 'image/jpeg', quality: quality / 100 });
+        const reader = new FileReader();
+        const grayDataUrl = await new Promise<string>((resolve) => {
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.readAsDataURL(grayBlob);
+        });
+
+        dataUrl = grayDataUrl;
+        console.log(`[screenshot] Converted to grayscale JPEG (quality: ${quality}%)`);
+      }
+    } catch (e) {
+      console.log('[screenshot] Grayscale conversion failed, using original:', e);
+    }
+  }
+
   return {
     success: true,
     result: {
       dataUrl,
-      format,
+      format: fullColor ? format : 'jpeg',
+      grayscale: !fullColor,
+      quality,
       tabId,
       url: tab.url,
       title: tab.title,
