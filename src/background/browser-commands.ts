@@ -40,6 +40,8 @@ export async function executeCommand(
         return await takeScreenshot(params);
       case 'snapshot':
         return await getSnapshot(params);
+      case 'snapshot_a11y':
+        return await getAccessibilitySnapshot(params);
       case 'console':
         return await getConsole(params);
 
@@ -77,6 +79,10 @@ export async function executeCommand(
         return await clickAtCoordinates(params);
       case 'type_at':
         return await typeAtCoordinates(params);
+      case 'click_a11y':
+        return await clickA11yElement(params);
+      case 'type_a11y':
+        return await typeA11yElement(params);
 
       // Unsupported OpenClaw actions - return helpful error messages
       case 'start':
@@ -182,6 +188,10 @@ async function executeAct(params: BrowserActionParams): Promise<CommandResult> {
       return await clickAtCoordinates(actParams);
     case 'type_at':
       return await typeAtCoordinates(actParams);
+    case 'click_a11y':
+      return await clickA11yElement(actParams);
+    case 'type_a11y':
+      return await typeA11yElement(actParams);
     case 'click_send_button':
       return await executeContentAction('click_send_button', actParams);
     case 'find_comment_input':
@@ -273,32 +283,28 @@ async function typeRawViaDebugger(params: BrowserActionParams): Promise<CommandR
     console.log('[type_raw] Debugger attached to tab', tabId);
 
     // Type each character using CDP Input.dispatchKeyEvent
+    // IMPORTANT: Only the 'char' event should have 'text' property
+    // keyDown/keyUp with 'text' causes double-typing
     for (const char of text) {
-      // Send keyDown event
+      // Send keyDown event (no text - just the key press)
       await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
         type: 'keyDown',
         key: char,
-        text: char,
-        unmodifiedText: char,
-        // windowsVirtualKeyCode and nativeVirtualKeyCode for special handling
         windowsVirtualKeyCode: char.charCodeAt(0),
         nativeVirtualKeyCode: char.charCodeAt(0),
       });
 
-      // Send char event (for text input)
+      // Send char event (this is what actually inserts the character)
       await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
         type: 'char',
-        key: char,
         text: char,
         unmodifiedText: char,
       });
 
-      // Send keyUp event
+      // Send keyUp event (no text - just the key release)
       await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
         type: 'keyUp',
         key: char,
-        text: char,
-        unmodifiedText: char,
         windowsVirtualKeyCode: char.charCodeAt(0),
         nativeVirtualKeyCode: char.charCodeAt(0),
       });
@@ -1123,18 +1129,80 @@ async function typeAtCoordinates(params: BrowserActionParams): Promise<CommandRe
     }
   }
 
-  // CDP path (for simple sites without shadow DOM)
-  // First click to focus the element
-  const clickResult = await clickAtCoordinates({ ...params, x, y, doubleClick: false });
-  if (!clickResult.success) {
-    return clickResult;
+  // Simplified approach: CDP click + content script insertText
+  // This avoids keyboard events that can trigger browser shortcuts
+  console.log('[type_at] Using simplified CDP click + insertText approach');
+
+  // Step 1: Click via CDP to focus (trusted event)
+  const target = { tabId };
+  try {
+    await chrome.debugger.attach(target, '1.3');
+
+    // Mouse move first
+    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x,
+      y,
+    });
+    await new Promise(resolve => setTimeout(resolve, 30));
+
+    // Mouse down + up = click
+    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x,
+      y,
+      button: 'left',
+      clickCount: 1,
+    });
+    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x,
+      y,
+      button: 'left',
+      clickCount: 1,
+    });
+
+    await chrome.debugger.detach(target);
+  } catch (e) {
+    console.log('[type_at] CDP click failed:', e);
+    return { success: false, error: `CDP click failed: ${e}` };
   }
 
-  // Small delay for focus
-  await new Promise(resolve => setTimeout(resolve, 100));
+  // Small delay for focus to take effect
+  await new Promise(resolve => setTimeout(resolve, 150));
 
-  // Then type using type_raw
-  return await typeRawViaDebugger({ ...params });
+  // Step 2: Simple insertText - just insert into whatever is focused after CDP click
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (inputText: string) => {
+        // Just try to insert text - CDP click should have focused the right element
+        const inserted = document.execCommand('insertText', false, inputText);
+        if (inserted) {
+          return { typed: true, method: 'execCommand' };
+        }
+
+        // If execCommand failed, try setting value on active element
+        const activeEl = document.activeElement as HTMLInputElement;
+        if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
+          activeEl.value = inputText;
+          activeEl.dispatchEvent(new Event('input', { bubbles: true }));
+          return { typed: true, method: 'value' };
+        }
+
+        return { typed: false, error: 'insertText failed' };
+      },
+      args: [text],
+    });
+
+    const result = results[0]?.result as { typed: boolean; element?: string; method?: string; error?: string };
+    if (result?.typed) {
+      return { success: true, result: { ...result, x, y } };
+    }
+    return { success: false, error: result?.error || 'insertText failed' };
+  } catch (err) {
+    return { success: false, error: `Content script type failed: ${err}` };
+  }
 }
 
 /**
@@ -1830,6 +1898,553 @@ async function executeContentAction(
     });
 
     return response;
+  }
+}
+
+/**
+ * Get accessibility tree via CDP - ignores shadow DOM boundaries
+ * Returns structured semantic data about interactive elements
+ */
+async function getAccessibilitySnapshot(params: BrowserActionParams): Promise<CommandResult> {
+  let tabId: number | undefined = params.targetId
+    ? typeof params.targetId === 'string'
+      ? parseInt(params.targetId, 10)
+      : params.targetId
+    : undefined;
+
+  if (!tabId || isNaN(tabId)) {
+    const [activeTab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    tabId = activeTab?.id;
+  }
+
+  if (!tabId) {
+    return { success: false, error: 'No tab for a11y snapshot' };
+  }
+
+  const target = { tabId };
+
+  try {
+    // Attach debugger
+    try {
+      await chrome.debugger.attach(target, '1.3');
+    } catch (e) {
+      // Already attached is fine
+      if (!(e instanceof Error && e.message.includes('Already attached'))) {
+        throw e;
+      }
+    }
+
+    // Get accessibility tree
+    const a11yResult = await chrome.debugger.sendCommand(
+      target,
+      'Accessibility.getFullAXTree',
+      {}
+    ) as { nodes: Array<{
+      nodeId: string;
+      role?: { value: string };
+      name?: { value: string };
+      properties?: Array<{ name: string; value: { value: unknown } }>;
+      backendDOMNodeId?: number;
+    }> };
+
+    // Get document for bounds calculation
+    const docResult = await chrome.debugger.sendCommand(
+      target,
+      'DOM.getDocument',
+      {}
+    ) as { root: { nodeId: number } };
+
+    // Process nodes into a useful format for LLM
+    interface A11yElement {
+      id: string;
+      role: string;
+      name: string;
+      checked?: boolean;
+      selected?: boolean;
+      disabled?: boolean;
+      expanded?: boolean;
+      focused?: boolean;
+      bounds?: { x: number; y: number; width: number; height: number };
+      backendNodeId?: number;
+    }
+
+    const interactiveRoles = new Set([
+      'button', 'checkbox', 'combobox', 'link', 'menuitem', 'menuitemcheckbox',
+      'menuitemradio', 'option', 'radio', 'searchbox', 'slider', 'spinbutton',
+      'switch', 'tab', 'textbox', 'treeitem', 'gridcell', 'row', 'columnheader',
+      'rowheader', 'listitem'
+    ]);
+
+    const elements: A11yElement[] = [];
+    let elementIndex = 0;
+
+    for (const node of a11yResult.nodes) {
+      const role = node.role?.value || '';
+      const name = node.name?.value || '';
+
+      // Skip non-interactive or unnamed elements
+      if (!interactiveRoles.has(role) || !name) {
+        continue;
+      }
+
+      // Extract properties
+      const props: Record<string, unknown> = {};
+      for (const prop of node.properties || []) {
+        props[prop.name] = prop.value?.value;
+      }
+
+      const element: A11yElement = {
+        id: `a${elementIndex++}`,
+        role,
+        name: name.slice(0, 100), // Truncate long names
+        backendNodeId: node.backendDOMNodeId,
+      };
+
+      // Add relevant state properties
+      if (props.checked !== undefined) element.checked = Boolean(props.checked);
+      if (props.selected !== undefined) element.selected = Boolean(props.selected);
+      if (props.disabled !== undefined) element.disabled = Boolean(props.disabled);
+      if (props.expanded !== undefined) element.expanded = Boolean(props.expanded);
+      if (props.focused !== undefined) element.focused = Boolean(props.focused);
+
+      // Try to get bounds for this element
+      if (node.backendDOMNodeId) {
+        try {
+          const boxResult = await chrome.debugger.sendCommand(
+            target,
+            'DOM.getBoxModel',
+            { backendNodeId: node.backendDOMNodeId }
+          ) as { model?: { content: number[] } };
+
+          if (boxResult.model?.content) {
+            // content array: [x1,y1, x2,y2, x3,y3, x4,y4] = top-left, top-right, bottom-right, bottom-left
+            const [x1, y1, x2, y2, x3, y3, x4, y4] = boxResult.model.content;
+            // Use top-left as origin, calculate width/height from corners
+            const minX = Math.min(x1, x2, x3, x4);
+            const minY = Math.min(y1, y2, y3, y4);
+            const maxX = Math.max(x1, x2, x3, x4);
+            const maxY = Math.max(y1, y2, y3, y4);
+            element.bounds = {
+              x: Math.round(minX),
+              y: Math.round(minY),
+              width: Math.round(maxX - minX),
+              height: Math.round(maxY - minY),
+            };
+          }
+        } catch {
+          // Element might not be visible/rendered
+        }
+      }
+
+      // Only include elements with bounds (visible)
+      if (element.bounds && element.bounds.width > 0 && element.bounds.height > 0) {
+        elements.push(element);
+      }
+    }
+
+    // Detach debugger
+    try {
+      await chrome.debugger.detach(target);
+    } catch {
+      // Ignore detach errors
+    }
+
+    // Get page info
+    const tab = await chrome.tabs.get(tabId);
+
+    // Format as readable text for LLM
+    let textSnapshot = `Page: ${tab.title || 'Untitled'}\nURL: ${tab.url || ''}\n\nInteractive Elements (${elements.length}):\n\n`;
+
+    for (const el of elements) {
+      let line = `[${el.id}] ${el.role.toUpperCase()}: "${el.name}"`;
+      if (el.checked !== undefined) line += ` [${el.checked ? 'checked' : 'unchecked'}]`;
+      if (el.selected) line += ' [selected]';
+      if (el.disabled) line += ' [disabled]';
+      if (el.expanded !== undefined) line += ` [${el.expanded ? 'expanded' : 'collapsed'}]`;
+      if (el.focused) line += ' [focused]';
+      if (el.bounds) line += ` at (${el.bounds.x},${el.bounds.y})`;
+      textSnapshot += line + '\n';
+    }
+
+    return {
+      success: true,
+      result: {
+        url: tab.url,
+        title: tab.title,
+        elements,
+        textSnapshot,
+        elementCount: elements.length,
+        targetId: String(tabId),
+      },
+    };
+  } catch (error) {
+    // Detach debugger on error
+    try {
+      await chrome.debugger.detach(target);
+    } catch {
+      // Ignore
+    }
+
+    console.error('[A11y Snapshot] Error:', error);
+    return {
+      success: false,
+      error: `A11y snapshot failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+/**
+ * Click an element by its a11y ID (e.g., "a5")
+ * Resolution agnostic: uses CDP to click directly via backendNodeId
+ */
+async function clickA11yElement(params: BrowserActionParams): Promise<CommandResult> {
+  const elementId = params.elementId || params.element; // e.g., "a5" or just "5"
+  if (!elementId) {
+    return { success: false, error: 'click_a11y requires elementId parameter (e.g., "a5")' };
+  }
+
+  // Get tab
+  let tabId: number | undefined = params.targetId
+    ? typeof params.targetId === 'string'
+      ? parseInt(params.targetId, 10)
+      : params.targetId
+    : undefined;
+
+  if (!tabId || isNaN(tabId)) {
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    tabId = activeTab?.id;
+  }
+
+  if (!tabId) {
+    return { success: false, error: 'No tab for click_a11y' };
+  }
+
+  const target = { tabId };
+
+  try {
+    // Attach debugger
+    try {
+      await chrome.debugger.attach(target, '1.3');
+    } catch (e) {
+      if (!(e instanceof Error && e.message.includes('Already attached'))) {
+        throw e;
+      }
+    }
+
+    // Get a11y tree to find element
+    const a11yResult = await chrome.debugger.sendCommand(
+      target,
+      'Accessibility.getFullAXTree',
+      {}
+    ) as { nodes: Array<{
+      nodeId: string;
+      role?: { value: string };
+      name?: { value: string };
+      backendDOMNodeId?: number;
+    }> };
+
+    // Find interactive elements and match by ID
+    const interactiveRoles = new Set([
+      'button', 'checkbox', 'combobox', 'link', 'menuitem', 'menuitemcheckbox',
+      'menuitemradio', 'option', 'radio', 'searchbox', 'slider', 'spinbutton',
+      'switch', 'tab', 'textbox', 'treeitem', 'gridcell', 'row', 'columnheader',
+      'rowheader', 'listitem'
+    ]);
+
+    let elementIndex = 0;
+    let targetNode: { backendDOMNodeId: number; role: string; name: string } | null = null;
+    const normalizedId = String(elementId).startsWith('a') ? elementId : `a${elementId}`;
+    const targetIndex = parseInt(normalizedId.replace('a', ''), 10);
+
+    for (const node of a11yResult.nodes) {
+      const role = node.role?.value || '';
+      const name = node.name?.value || '';
+
+      if (!interactiveRoles.has(role) || !name || !node.backendDOMNodeId) {
+        continue;
+      }
+
+      if (elementIndex === targetIndex) {
+        targetNode = {
+          backendDOMNodeId: node.backendDOMNodeId,
+          role,
+          name,
+        };
+        break;
+      }
+      elementIndex++;
+    }
+
+    if (!targetNode) {
+      await chrome.debugger.detach(target);
+      return {
+        success: false,
+        error: `Element ${normalizedId} not found in a11y tree`,
+      };
+    }
+
+    console.log(`[click_a11y] Found ${normalizedId}: ${targetNode.role} "${targetNode.name.slice(0, 50)}" (backendNodeId: ${targetNode.backendDOMNodeId})`);
+
+    // RESOLUTION AGNOSTIC APPROACH:
+    // 1. Scroll element into view
+    // 2. Get element's center coordinates in viewport
+    // 3. Click at those coordinates
+
+    // Step 1: Scroll into view
+    try {
+      await chrome.debugger.sendCommand(target, 'DOM.scrollIntoViewIfNeeded', {
+        backendNodeId: targetNode.backendDOMNodeId,
+      });
+      await new Promise(resolve => setTimeout(resolve, 100));
+    } catch (e) {
+      console.log('[click_a11y] scrollIntoViewIfNeeded failed, continuing anyway:', e);
+    }
+
+    // Step 2: Get content quads (viewport coordinates after scroll)
+    const quadsResult = await chrome.debugger.sendCommand(target, 'DOM.getContentQuads', {
+      backendNodeId: targetNode.backendDOMNodeId,
+    }) as { quads: number[][] };
+
+    if (!quadsResult.quads || quadsResult.quads.length === 0) {
+      await chrome.debugger.detach(target);
+      return {
+        success: false,
+        error: `Element ${normalizedId} has no visible quads`,
+      };
+    }
+
+    // Get center of first quad (already in viewport coordinates)
+    const quad = quadsResult.quads[0];
+    const centerX = (quad[0] + quad[2] + quad[4] + quad[6]) / 4;
+    const centerY = (quad[1] + quad[3] + quad[5] + quad[7]) / 4;
+
+    console.log(`[click_a11y] Clicking at viewport center (${Math.round(centerX)}, ${Math.round(centerY)})`);
+
+    // Step 3: Click using CDP mouse events
+    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: centerX,
+      y: centerY,
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x: centerX,
+      y: centerY,
+      button: 'left',
+      clickCount: 1,
+    });
+
+    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: centerX,
+      y: centerY,
+      button: 'left',
+      clickCount: 1,
+    });
+
+    await chrome.debugger.detach(target);
+
+    return {
+      success: true,
+      result: {
+        clicked: true,
+        elementId: normalizedId,
+        role: targetNode.role,
+        name: targetNode.name,
+        coordinates: { x: Math.round(centerX), y: Math.round(centerY) },
+        method: 'a11y-cdp',
+      },
+    };
+  } catch (error) {
+    try {
+      await chrome.debugger.detach(target);
+    } catch { /* ignore */ }
+
+    console.error('[click_a11y] Error:', error);
+    return {
+      success: false,
+      error: `click_a11y failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+/**
+ * Type into an element by its a11y ID
+ * Resolution agnostic: focuses element via CDP, then types
+ */
+async function typeA11yElement(params: BrowserActionParams): Promise<CommandResult> {
+  const elementId = params.elementId || params.element;
+  const text = params.text;
+
+  if (!elementId) {
+    return { success: false, error: 'type_a11y requires elementId parameter' };
+  }
+  if (!text) {
+    return { success: false, error: 'type_a11y requires text parameter' };
+  }
+
+  // Get tab
+  let tabId: number | undefined = params.targetId
+    ? typeof params.targetId === 'string'
+      ? parseInt(params.targetId, 10)
+      : params.targetId
+    : undefined;
+
+  if (!tabId || isNaN(tabId)) {
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    tabId = activeTab?.id;
+  }
+
+  if (!tabId) {
+    return { success: false, error: 'No tab for type_a11y' };
+  }
+
+  const target = { tabId };
+
+  try {
+    // Attach debugger
+    try {
+      await chrome.debugger.attach(target, '1.3');
+    } catch (e) {
+      if (!(e instanceof Error && e.message.includes('Already attached'))) {
+        throw e;
+      }
+    }
+
+    // Get a11y tree to find element
+    const a11yResult = await chrome.debugger.sendCommand(
+      target,
+      'Accessibility.getFullAXTree',
+      {}
+    ) as { nodes: Array<{
+      nodeId: string;
+      role?: { value: string };
+      name?: { value: string };
+      backendDOMNodeId?: number;
+    }> };
+
+    // Find interactive elements and match by ID
+    const interactiveRoles = new Set([
+      'button', 'checkbox', 'combobox', 'link', 'menuitem', 'menuitemcheckbox',
+      'menuitemradio', 'option', 'radio', 'searchbox', 'slider', 'spinbutton',
+      'switch', 'tab', 'textbox', 'treeitem', 'gridcell', 'row', 'columnheader',
+      'rowheader', 'listitem'
+    ]);
+
+    let elementIndex = 0;
+    let targetNode: { backendDOMNodeId: number; role: string; name: string } | null = null;
+    const normalizedId = String(elementId).startsWith('a') ? elementId : `a${elementId}`;
+    const targetIndex = parseInt(normalizedId.replace('a', ''), 10);
+
+    for (const node of a11yResult.nodes) {
+      const role = node.role?.value || '';
+      const name = node.name?.value || '';
+
+      if (!interactiveRoles.has(role) || !name || !node.backendDOMNodeId) {
+        continue;
+      }
+
+      if (elementIndex === targetIndex) {
+        targetNode = {
+          backendDOMNodeId: node.backendDOMNodeId,
+          role,
+          name,
+        };
+        break;
+      }
+      elementIndex++;
+    }
+
+    if (!targetNode) {
+      await chrome.debugger.detach(target);
+      return {
+        success: false,
+        error: `Element ${normalizedId} not found in a11y tree`,
+      };
+    }
+
+    console.log(`[type_a11y] Found ${normalizedId}: ${targetNode.role} "${targetNode.name.slice(0, 50)}"`);
+
+    // Scroll into view
+    try {
+      await chrome.debugger.sendCommand(target, 'DOM.scrollIntoViewIfNeeded', {
+        backendNodeId: targetNode.backendDOMNodeId,
+      });
+      await new Promise(resolve => setTimeout(resolve, 100));
+    } catch (e) {
+      console.log('[type_a11y] scrollIntoViewIfNeeded failed:', e);
+    }
+
+    // Focus the element
+    try {
+      await chrome.debugger.sendCommand(target, 'DOM.focus', {
+        backendNodeId: targetNode.backendDOMNodeId,
+      });
+      await new Promise(resolve => setTimeout(resolve, 100));
+    } catch (e) {
+      console.log('[type_a11y] DOM.focus failed, trying click:', e);
+      // Fallback: click to focus
+      const quadsResult = await chrome.debugger.sendCommand(target, 'DOM.getContentQuads', {
+        backendNodeId: targetNode.backendDOMNodeId,
+      }) as { quads: number[][] };
+
+      if (quadsResult.quads && quadsResult.quads.length > 0) {
+        const quad = quadsResult.quads[0];
+        const centerX = (quad[0] + quad[2] + quad[4] + quad[6]) / 4;
+        const centerY = (quad[1] + quad[3] + quad[5] + quad[7]) / 4;
+
+        await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+          type: 'mousePressed',
+          x: centerX,
+          y: centerY,
+          button: 'left',
+          clickCount: 1,
+        });
+        await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+          type: 'mouseReleased',
+          x: centerX,
+          y: centerY,
+          button: 'left',
+          clickCount: 1,
+        });
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+
+    // Type using insertText (most reliable for all input types)
+    await chrome.debugger.sendCommand(target, 'Input.insertText', {
+      text: text,
+    });
+
+    await chrome.debugger.detach(target);
+
+    return {
+      success: true,
+      result: {
+        typed: true,
+        elementId: normalizedId,
+        role: targetNode.role,
+        name: targetNode.name,
+        text,
+        method: 'a11y-cdp',
+      },
+    };
+  } catch (error) {
+    try {
+      await chrome.debugger.detach(target);
+    } catch { /* ignore */ }
+
+    console.error('[type_a11y] Error:', error);
+    return {
+      success: false,
+      error: `type_a11y failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
   }
 }
 
