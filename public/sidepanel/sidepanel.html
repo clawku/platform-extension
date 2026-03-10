@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Clawku Browser Agent</title>
-  <link rel="stylesheet" href="popup.css">
+  <link rel="stylesheet" href="sidepanel.css">
 </head>
 <body>
   <div class="container">
@@ -14,15 +14,14 @@
       <span class="subtitle">Browser Agent</span>
     </header>
 
-    <!-- Navigation Tabs (shown when connected) -->
-    <nav id="nav-tabs" class="nav-tabs hidden">
-      <button class="nav-tab active" data-tab="control">Control</button>
-      <button class="nav-tab" data-tab="chat">Chat</button>
-      <button class="nav-tab" data-tab="orchestration">Team</button>
-    </nav>
+    <!-- Loading State -->
+    <div id="state-loading" class="state">
+      <div class="loading-spinner"></div>
+      <p>Loading...</p>
+    </div>
 
     <!-- Not Paired State -->
-    <div id="state-unpaired" class="state">
+    <div id="state-unpaired" class="state hidden">
       <p class="description">Enable web control for your AI agent</p>
 
       <div class="input-group">
@@ -58,58 +57,16 @@
       </p>
     </div>
 
-    <!-- Tab: Control (Browser Control Status) -->
-    <div id="tab-control" class="tab-content">
-      <!-- Paired & Connected State -->
-      <div id="state-connected" class="state hidden">
-        <div class="status-card connected">
-          <div class="status-indicator"></div>
-          <div class="status-info">
-            <span class="status-label">Connected</span>
-            <span id="persona-name" class="persona-name">-</span>
-          </div>
-        </div>
+    <!-- Navigation Tabs (shown when connected) -->
+    <nav id="nav-tabs" class="nav-tabs hidden">
+      <button class="nav-tab active" data-tab="chat">Chat</button>
+      <button class="nav-tab" data-tab="team">Team</button>
+      <button class="nav-tab" data-tab="settings">Settings</button>
+    </nav>
 
-        <div class="actions">
-          <button id="btn-test" class="btn-secondary">
-            Test Connection
-          </button>
-          <button id="btn-disconnect" class="btn-danger">
-            Disconnect
-          </button>
-        </div>
-
-        <div id="activity-log" class="activity-log hidden">
-          <h3>Recent Activity</h3>
-          <ul id="activity-list"></ul>
-        </div>
-      </div>
-
-      <!-- Paired but Disconnected State -->
-      <div id="state-disconnected" class="state hidden">
-        <div class="status-card disconnected">
-          <div class="status-indicator"></div>
-          <div class="status-info">
-            <span class="status-label">Reconnecting...</span>
-            <span id="persona-name-disconnected" class="persona-name">-</span>
-          </div>
-        </div>
-
-        <div class="actions">
-          <button id="btn-reconnect" class="btn-primary">
-            Reconnect Now
-          </button>
-          <button id="btn-disconnect-2" class="btn-danger">
-            Disconnect
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Tab: Chat (Single Persona Chat) -->
+    <!-- Tab: Chat -->
     <div id="tab-chat" class="tab-content hidden">
       <div class="chat-container">
-        <!-- Persona Selector -->
         <div class="persona-selector">
           <select id="persona-select">
             <option value="">Select persona...</option>
@@ -121,17 +78,14 @@
           </button>
         </div>
 
-        <!-- Messages -->
         <div id="chat-messages" class="chat-messages">
           <div class="chat-empty">
             <p>Select a persona to start chatting</p>
           </div>
         </div>
 
-        <!-- Attachment Preview -->
         <div id="chat-attachments" class="attachment-preview hidden"></div>
 
-        <!-- Input -->
         <div class="chat-input-container">
           <button id="btn-attach-chat" class="btn-attach" title="Attach file">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
@@ -153,10 +107,9 @@
       </div>
     </div>
 
-    <!-- Tab: Orchestration (Multi-Persona Chat) -->
-    <div id="tab-orchestration" class="tab-content hidden">
+    <!-- Tab: Team (Orchestration) -->
+    <div id="tab-team" class="tab-content hidden">
       <div class="orchestration-container">
-        <!-- Room Header -->
         <div class="room-header">
           <select id="room-select">
             <option value="">Select room...</option>
@@ -171,41 +124,67 @@
           </button>
         </div>
 
-        <!-- Room menu dropdown -->
         <div id="room-menu" class="dropdown-menu hidden">
           <button id="btn-clear-room" class="dropdown-item">Clear Messages</button>
           <button id="btn-delete-room" class="dropdown-item danger">Delete Room</button>
         </div>
 
-        <!-- Messages -->
-        <div id="orchestration-messages" class="chat-messages">
+        <div id="team-messages" class="chat-messages">
           <div class="chat-empty">
             <p>Select or create a room to chat with all your personas</p>
             <p class="help-hint">Use @name to mention specific personas</p>
           </div>
         </div>
 
-        <!-- Attachment Preview -->
-        <div id="orchestration-attachments" class="attachment-preview hidden"></div>
+        <div id="team-attachments" class="attachment-preview hidden"></div>
 
-        <!-- Input -->
         <div class="chat-input-container">
-          <button id="btn-attach-orchestration" class="btn-attach" title="Attach file">
+          <button id="btn-attach-team" class="btn-attach" title="Attach file">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
               <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </button>
           <textarea
-            id="orchestration-input"
+            id="team-input"
             placeholder="Message all personas... (or @mention)"
             rows="1"
           ></textarea>
-          <button id="btn-send-orchestration" class="btn-send" disabled>
+          <button id="btn-send-team" class="btn-send" disabled>
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
               <path d="M18.333 1.667L9.167 10.833M18.333 1.667l-5.833 16.666-3.333-7.5-7.5-3.333 16.666-5.833z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </button>
-          <input type="file" id="orchestration-file-input" hidden accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.csv,.json">
+          <input type="file" id="team-file-input" hidden accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.csv,.json">
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Settings -->
+    <div id="tab-settings" class="tab-content hidden">
+      <div class="settings-container">
+        <div class="status-card connected">
+          <div class="status-indicator"></div>
+          <div class="status-info">
+            <span class="status-label">Connected</span>
+            <span id="user-email" class="persona-name">-</span>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="setting-item">
+            <span class="setting-label">Extension ID</span>
+            <span id="extension-id" class="setting-value">-</span>
+          </div>
+          <div class="setting-item">
+            <span class="setting-label">API URL</span>
+            <span id="api-url-display" class="setting-value">-</span>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="btn-disconnect" class="btn-danger">
+            Disconnect
+          </button>
         </div>
       </div>
     </div>
@@ -219,14 +198,8 @@
         Retry
       </button>
     </div>
-
-    <!-- Loading State -->
-    <div id="state-loading" class="state">
-      <div class="loading-spinner"></div>
-      <p>Loading...</p>
-    </div>
   </div>
 
-  <script src="popup.js" type="module"></script>
+  <script type="module" src="sidepanel.js"></script>
 </body>
 </html>

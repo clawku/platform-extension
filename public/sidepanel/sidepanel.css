@@ -95,9 +95,8 @@ body {
    ========================================================================== */
 
 .container {
-  width: 380px;
-  min-height: 500px;
-  max-height: 600px;
+  width: 100%;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   background: var(--color-cloud);
@@ -410,6 +409,52 @@ header .subtitle {
 
 .actions button {
   flex: 1;
+}
+
+/* ==========================================================================
+   Settings
+   ========================================================================== */
+
+.settings-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  gap: 20px;
+}
+
+.settings-section {
+  background: var(--color-cloud);
+  border: 1px solid var(--color-cloud-fog);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.setting-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--color-cloud-fog);
+}
+
+.setting-item:last-child {
+  border-bottom: none;
+}
+
+.setting-label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-navy);
+}
+
+.setting-value {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  max-width: 60%;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 /* ==========================================================================
