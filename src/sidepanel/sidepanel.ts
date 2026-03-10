@@ -366,11 +366,18 @@ function appendMessage(container: HTMLElement, role: 'user' | 'assistant', conte
   div.className = `message ${role}${streaming ? ' streaming' : ''}`;
   if (streaming) div.id = 'streaming-message';
 
-  let html = '';
-  if (personaName && role === 'assistant') {
-    html += `<div class="message-header"><span class="message-sender">${escapeHtml(personaName)}</span></div>`;
-  }
+  // Get persona name and avatar
+  const persona = selectedPersonaId ? personas.find(p => p.id === selectedPersonaId) : null;
+  const avatarContent = role === 'user'
+    ? 'U'
+    : (persona?.name?.charAt(0).toUpperCase() || 'A');
+  const senderName = role === 'user' ? 'You' : (personaName || persona?.name || 'Assistant');
+
+  let html = `<div class="message-avatar">${avatarContent}</div>`;
+  html += `<div class="message-wrapper">`;
+  html += `<div class="message-sender">${escapeHtml(senderName)}</div>`;
   html += `<div class="message-content">${escapeHtml(content)}</div>`;
+  html += `</div>`;
   div.innerHTML = html;
 
   container.appendChild(div);
@@ -382,7 +389,7 @@ function updateStreamingMessage(container: HTMLElement, content: string) {
   if (!div) {
     appendMessage(container, 'assistant', content, true);
   } else {
-    const contentDiv = div.querySelector('.message-content');
+    const contentDiv = div.querySelector('.message-wrapper .message-content');
     if (contentDiv) contentDiv.textContent = content;
   }
   container.scrollTop = container.scrollHeight;
@@ -393,7 +400,7 @@ async function finalizeChatMessage(content: string) {
   if (div) {
     div.classList.remove('streaming');
     div.removeAttribute('id');
-    const contentDiv = div.querySelector('.message-content');
+    const contentDiv = div.querySelector('.message-wrapper .message-content');
     if (contentDiv) contentDiv.textContent = content;
   } else {
     appendMessage(chatMessages, 'assistant', content);
@@ -494,11 +501,14 @@ function appendTeamMessage(role: 'user' | 'assistant', name: string, content: st
   div.className = `message ${role}${streaming ? ' streaming' : ''}`;
   if (streaming && personaId) div.id = `streaming-${personaId}`;
 
-  let html = '';
-  if (role === 'assistant') {
-    html += `<div class="message-header"><span class="message-sender">${escapeHtml(name)}</span></div>`;
-  }
+  // Get avatar initial
+  const avatarContent = role === 'user' ? 'U' : name.charAt(0).toUpperCase();
+
+  let html = `<div class="message-avatar">${avatarContent}</div>`;
+  html += `<div class="message-wrapper">`;
+  html += `<div class="message-sender">${escapeHtml(name)}</div>`;
   html += `<div class="message-content">${escapeHtml(content)}</div>`;
+  html += `</div>`;
   div.innerHTML = html;
 
   teamMessages.appendChild(div);
@@ -510,7 +520,7 @@ function updateTeamStreamingMessage(personaId: string, name: string, content: st
   if (!div) {
     appendTeamMessage('assistant', name, content, true, personaId);
   } else {
-    const contentDiv = div.querySelector('.message-content');
+    const contentDiv = div.querySelector('.message-wrapper .message-content');
     if (contentDiv) contentDiv.textContent = content;
   }
   teamMessages.scrollTop = teamMessages.scrollHeight;
@@ -521,7 +531,7 @@ async function finalizeTeamMessage(personaId: string, name: string, content: str
   if (div) {
     div.classList.remove('streaming');
     div.removeAttribute('id');
-    const contentDiv = div.querySelector('.message-content');
+    const contentDiv = div.querySelector('.message-wrapper .message-content');
     if (contentDiv) contentDiv.textContent = content;
   } else {
     appendTeamMessage('assistant', name, content);

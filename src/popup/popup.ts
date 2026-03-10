@@ -571,12 +571,14 @@ function appendChatMessage(role: 'user' | 'assistant', content: string, streamin
   div.id = streaming ? 'streaming-message' : '';
 
   const senderName = role === 'user' ? 'You' : personaSelect.options[personaSelect.selectedIndex]?.text || 'Agent';
+  const avatarContent = role === 'user' ? 'U' : senderName.charAt(0).toUpperCase();
 
   div.innerHTML = `
-    <div class="message-header">
-      <span class="message-sender">${senderName}</span>
+    <div class="message-avatar">${avatarContent}</div>
+    <div class="message-wrapper">
+      <div class="message-sender">${senderName}</div>
+      <div class="message-content">${escapeHtml(content)}</div>
     </div>
-    <div class="message-content">${escapeHtml(content)}</div>
   `;
 
   chatMessages.appendChild(div);
@@ -588,7 +590,7 @@ function updateChatStreamingMessage(content: string) {
   if (!streamingDiv) {
     appendChatMessage('assistant', content, true);
   } else {
-    const contentDiv = streamingDiv.querySelector('.message-content');
+    const contentDiv = streamingDiv.querySelector('.message-wrapper .message-content');
     if (contentDiv) {
       contentDiv.textContent = content;
     }
@@ -601,7 +603,7 @@ async function finalizeChatMessage(content: string) {
   if (streamingDiv) {
     streamingDiv.classList.remove('streaming');
     streamingDiv.removeAttribute('id');
-    const contentDiv = streamingDiv.querySelector('.message-content');
+    const contentDiv = streamingDiv.querySelector('.message-wrapper .message-content');
     if (contentDiv) {
       contentDiv.textContent = content;
     }
@@ -761,14 +763,15 @@ function appendOrchestrationMessage(
     div.id = `streaming-${personaId}`;
   }
 
-  const badge = role === 'assistant' ? `<span class="persona-badge">${escapeHtml(senderName)}</span>` : '';
+  const displayName = role === 'user' ? 'You' : senderName;
+  const avatarContent = role === 'user' ? 'U' : senderName.charAt(0).toUpperCase();
 
   div.innerHTML = `
-    <div class="message-header">
-      <span class="message-sender">${role === 'user' ? 'You' : senderName}</span>
-      ${badge}
+    <div class="message-avatar">${avatarContent}</div>
+    <div class="message-wrapper">
+      <div class="message-sender">${displayName}</div>
+      <div class="message-content">${escapeHtml(content)}</div>
     </div>
-    <div class="message-content">${escapeHtml(content)}</div>
   `;
 
   orchestrationMessages.appendChild(div);
@@ -780,7 +783,7 @@ function updateOrchestrationStreamingMessage(personaId: string, personaName: str
   if (!streamingDiv) {
     appendOrchestrationMessage('assistant', personaName, content, true, personaId);
   } else {
-    const contentDiv = streamingDiv.querySelector('.message-content');
+    const contentDiv = streamingDiv.querySelector('.message-wrapper .message-content');
     if (contentDiv) {
       contentDiv.textContent = content;
     }
@@ -793,7 +796,7 @@ async function finalizeOrchestrationMessage(personaId: string, personaName: stri
   if (streamingDiv) {
     streamingDiv.classList.remove('streaming');
     streamingDiv.removeAttribute('id');
-    const contentDiv = streamingDiv.querySelector('.message-content');
+    const contentDiv = streamingDiv.querySelector('.message-wrapper .message-content');
     if (contentDiv) {
       contentDiv.textContent = content;
     }
