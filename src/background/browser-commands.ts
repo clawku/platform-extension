@@ -1129,11 +1129,11 @@ async function typeAtCoordinates(params: BrowserActionParams): Promise<CommandRe
     }
   }
 
-  // Simplified approach: CDP click + content script insertText
-  // This avoids keyboard events that can trigger browser shortcuts
-  console.log('[type_at] Using simplified CDP click + insertText approach');
+  // Simplified approach: CDP triple-click (select all) + content script insertText
+  // This clears existing text and avoids keyboard events that can trigger browser shortcuts
+  console.log('[type_at] Using CDP triple-click + insertText approach (clears existing text)');
 
-  // Step 1: Click via CDP to focus (trusted event)
+  // Step 1: Triple-click via CDP to focus and select all (trusted event)
   const target = { tabId };
   try {
     await chrome.debugger.attach(target, '1.3');
@@ -1146,20 +1146,20 @@ async function typeAtCoordinates(params: BrowserActionParams): Promise<CommandRe
     });
     await new Promise(resolve => setTimeout(resolve, 30));
 
-    // Mouse down + up = click
+    // Triple-click to select all existing text
     await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
       type: 'mousePressed',
       x,
       y,
       button: 'left',
-      clickCount: 1,
+      clickCount: 3, // Triple-click selects all
     });
     await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
       type: 'mouseReleased',
       x,
       y,
       button: 'left',
-      clickCount: 1,
+      clickCount: 3,
     });
 
     await chrome.debugger.detach(target);
@@ -2381,43 +2381,45 @@ async function typeA11yElement(params: BrowserActionParams): Promise<CommandResu
       console.log('[type_a11y] scrollIntoViewIfNeeded failed:', e);
     }
 
-    // Focus the element
-    try {
-      await chrome.debugger.sendCommand(target, 'DOM.focus', {
-        backendNodeId: targetNode.backendDOMNodeId,
-      });
-      await new Promise(resolve => setTimeout(resolve, 100));
-    } catch (e) {
-      console.log('[type_a11y] DOM.focus failed, trying click:', e);
-      // Fallback: click to focus
-      const quadsResult = await chrome.debugger.sendCommand(target, 'DOM.getContentQuads', {
-        backendNodeId: targetNode.backendDOMNodeId,
-      }) as { quads: number[][] };
+    // Get element coordinates for clicking
+    const quadsResult = await chrome.debugger.sendCommand(target, 'DOM.getContentQuads', {
+      backendNodeId: targetNode.backendDOMNodeId,
+    }) as { quads: number[][] };
 
-      if (quadsResult.quads && quadsResult.quads.length > 0) {
-        const quad = quadsResult.quads[0];
-        const centerX = (quad[0] + quad[2] + quad[4] + quad[6]) / 4;
-        const centerY = (quad[1] + quad[3] + quad[5] + quad[7]) / 4;
-
-        await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
-          type: 'mousePressed',
-          x: centerX,
-          y: centerY,
-          button: 'left',
-          clickCount: 1,
-        });
-        await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
-          type: 'mouseReleased',
-          x: centerX,
-          y: centerY,
-          button: 'left',
-          clickCount: 1,
-        });
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
+    if (!quadsResult.quads || quadsResult.quads.length === 0) {
+      await chrome.debugger.detach(target);
+      return {
+        success: false,
+        error: `Element ${normalizedId} has no visible quads`,
+      };
     }
 
-    // Type using insertText (most reliable for all input types)
+    const quad = quadsResult.quads[0];
+    const centerX = (quad[0] + quad[2] + quad[4] + quad[6]) / 4;
+    const centerY = (quad[1] + quad[3] + quad[5] + quad[7]) / 4;
+
+    // Triple-click to select all existing text (works for most input fields)
+    console.log(`[type_a11y] Triple-clicking at (${Math.round(centerX)}, ${Math.round(centerY)}) to select all`);
+
+    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x: centerX,
+      y: centerY,
+      button: 'left',
+      clickCount: 3, // Triple-click selects all
+    });
+    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: centerX,
+      y: centerY,
+      button: 'left',
+      clickCount: 3,
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Type using insertText - this replaces selected text
+    console.log(`[type_a11y] Inserting text: "${text.slice(0, 30)}..."`);
     await chrome.debugger.sendCommand(target, 'Input.insertText', {
       text: text,
     });
