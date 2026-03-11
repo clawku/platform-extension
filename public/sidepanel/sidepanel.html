@@ -61,8 +61,48 @@
     <nav id="nav-tabs" class="nav-tabs hidden">
       <button class="nav-tab active" data-tab="chat">Chat</button>
       <button class="nav-tab" data-tab="team">Team</button>
+      <button class="nav-tab" data-tab="learning">Learn</button>
       <button class="nav-tab" data-tab="settings">Settings</button>
     </nav>
+
+    <!-- Consent/Feedback Overlay -->
+    <div id="consent-overlay" class="consent-overlay hidden">
+      <div class="consent-card">
+        <div class="consent-header">
+          <span class="consent-icon">🤖</span>
+          <h3>Action Request</h3>
+        </div>
+        <div class="consent-body">
+          <p id="consent-description" class="consent-description"></p>
+          <div class="consent-details">
+            <span id="consent-domain" class="consent-domain"></span>
+            <span id="consent-action" class="consent-action-type"></span>
+          </div>
+        </div>
+        <div class="consent-actions">
+          <button id="btn-consent-deny" class="btn-consent-deny">Deny</button>
+          <button id="btn-consent-allow" class="btn-consent-allow">Allow</button>
+        </div>
+        <label class="consent-remember">
+          <input type="checkbox" id="consent-remember-checkbox">
+          <span>Remember for this site</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Feedback Toast -->
+    <div id="feedback-toast" class="feedback-toast hidden">
+      <div class="feedback-content">
+        <span id="feedback-description" class="feedback-description">Did this work?</span>
+        <div class="feedback-buttons">
+          <button id="btn-feedback-good" class="btn-feedback btn-feedback-good" title="Good">👍</button>
+          <button id="btn-feedback-bad" class="btn-feedback btn-feedback-bad" title="Bad">👎</button>
+        </div>
+      </div>
+      <div class="feedback-progress">
+        <div id="feedback-progress-bar" class="feedback-progress-bar"></div>
+      </div>
+    </div>
 
     <!-- Tab: Chat -->
     <div id="tab-chat" class="tab-content hidden">
@@ -185,6 +225,59 @@
           <button id="btn-disconnect" class="btn-danger">
             Disconnect
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Learning (Pattern Learning Stats & Settings) -->
+    <div id="tab-learning" class="tab-content hidden">
+      <div class="learning-container">
+        <div class="learning-toggle">
+          <label class="toggle-label">
+            <span>Pattern Learning</span>
+            <input type="checkbox" id="learning-enabled" checked>
+            <span class="toggle-slider"></span>
+          </label>
+          <p class="learning-hint">Learn from successful actions to improve speed</p>
+        </div>
+
+        <div class="learning-stats">
+          <h3>Statistics</h3>
+          <div class="stats-grid">
+            <div class="stat-card">
+              <span class="stat-value" id="stat-patterns">0</span>
+              <span class="stat-label">Patterns</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-value" id="stat-actions">0</span>
+              <span class="stat-label">Actions</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-value" id="stat-hit-rate">0%</span>
+              <span class="stat-label">Cache Hits</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-value" id="stat-success-rate">0%</span>
+              <span class="stat-label">Success</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="learning-domains">
+          <h3>Top Sites</h3>
+          <ul id="top-domains" class="domains-list">
+            <li class="empty-state">No patterns learned yet</li>
+          </ul>
+        </div>
+
+        <div class="learning-actions">
+          <button id="btn-clear-patterns" class="btn-secondary btn-small">Clear All</button>
+          <button id="btn-export-patterns" class="btn-secondary btn-small">Export</button>
+        </div>
+
+        <div class="privacy-notice">
+          <h4>Privacy</h4>
+          <p>Only structural patterns stored. No user content, passwords, or personal data.</p>
         </div>
       </div>
     </div>
