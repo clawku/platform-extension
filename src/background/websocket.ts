@@ -76,7 +76,7 @@ class WebSocketConnection {
       return false;
     }
 
-    const wsUrl = this.storage.wsBaseUrl || 'wss://api.b.clawku.id';
+    const wsUrl = this.storage.wsBaseUrl || 'wss://b.api.clawku.id';
 
     try {
       await this.ensureOffscreenDocument();

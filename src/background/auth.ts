@@ -1,8 +1,8 @@
 import type { ExtensionStorage, ConnectionStatus } from '../types/messages.js';
 import { ensureSigningKey, clearSigningKeys } from './crypto.js';
 
-const DEFAULT_API_URL = 'http://localhost:3000';
-const DEFAULT_WS_URL = 'ws://localhost:3000';
+const DEFAULT_API_URL = 'https://b.api.clawku.id';
+const DEFAULT_WS_URL = 'wss://b.api.clawku.id';
 
 export async function pair(
   code: string,
@@ -112,7 +112,7 @@ export async function getStatus(): Promise<ConnectionStatus> {
     lastSeen: storage.pairedAt,
     userEmail: storage.userId,
     extensionId: chrome.runtime.id,
-    apiUrl: storage.apiBaseUrl || 'https://api.clawku.ai',
+    apiUrl: storage.apiBaseUrl || 'https://b.api.clawku.id',
   };
 }
 
