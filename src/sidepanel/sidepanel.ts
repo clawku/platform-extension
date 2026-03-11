@@ -33,7 +33,6 @@ const stateError = document.getElementById('state-error')!;
 const navTabs = document.getElementById('nav-tabs')!;
 const tabChat = document.getElementById('tab-chat')!;
 const tabTeam = document.getElementById('tab-team')!;
-const tabLearning = document.getElementById('tab-learning')!;
 const tabSettings = document.getElementById('tab-settings')!;
 
 // Consent overlay elements
@@ -52,15 +51,6 @@ const feedbackProgressBar = document.getElementById('feedback-progress-bar')!;
 const btnFeedbackGood = document.getElementById('btn-feedback-good')!;
 const btnFeedbackBad = document.getElementById('btn-feedback-bad')!;
 
-// Learning tab elements
-const learningEnabled = document.getElementById('learning-enabled') as HTMLInputElement;
-const statPatterns = document.getElementById('stat-patterns')!;
-const statActions = document.getElementById('stat-actions')!;
-const statHitRate = document.getElementById('stat-hit-rate')!;
-const statSuccessRate = document.getElementById('stat-success-rate')!;
-const topDomains = document.getElementById('top-domains')!;
-const btnClearPatterns = document.getElementById('btn-clear-patterns')!;
-const btnExportPatterns = document.getElementById('btn-export-patterns')!;
 
 // Pairing
 const pairingCode = document.getElementById('pairing-code') as HTMLInputElement;
@@ -102,7 +92,7 @@ const btnRetry = document.getElementById('btn-retry')!;
 
 // ============ State ============
 
-let currentTab: 'chat' | 'team' | 'learning' | 'settings' = 'chat';
+let currentTab: 'chat' | 'team' | 'settings' = 'chat';
 let isPaired = false;
 let personas: Persona[] = [];
 let selectedPersonaId: string | null = null;
@@ -126,7 +116,6 @@ function setState(state: 'loading' | 'unpaired' | 'connected' | 'error') {
   navTabs.classList.add('hidden');
   tabChat.classList.add('hidden');
   tabTeam.classList.add('hidden');
-  tabLearning.classList.add('hidden');
   tabSettings.classList.add('hidden');
 
   switch (state) {
@@ -148,7 +137,7 @@ function setState(state: 'loading' | 'unpaired' | 'connected' | 'error') {
   }
 }
 
-function showTab(tab: 'chat' | 'team' | 'learning' | 'settings') {
+function showTab(tab: 'chat' | 'team' | 'settings') {
   currentTab = tab;
 
   // Update tab buttons
@@ -159,7 +148,6 @@ function showTab(tab: 'chat' | 'team' | 'learning' | 'settings') {
   // Show/hide tab content
   tabChat.classList.add('hidden');
   tabTeam.classList.add('hidden');
-  tabLearning.classList.add('hidden');
   tabSettings.classList.add('hidden');
 
   if (tab === 'chat') {
@@ -168,9 +156,6 @@ function showTab(tab: 'chat' | 'team' | 'learning' | 'settings') {
   } else if (tab === 'team') {
     tabTeam.classList.remove('hidden');
     if (isPaired) loadRooms();
-  } else if (tab === 'learning') {
-    tabLearning.classList.remove('hidden');
-    loadLearningStats();
   } else if (tab === 'settings') {
     tabSettings.classList.remove('hidden');
     loadSettings();
@@ -932,70 +917,6 @@ btnClearRoom.addEventListener('click', handleClearRoom);
 document.addEventListener('click', (e) => {
   if (!btnRoomMenu.contains(e.target as Node) && !roomMenu.contains(e.target as Node)) {
     roomMenu.classList.add('hidden');
-  }
-});
-
-// ============ Learning Tab ============
-
-interface LearningStats {
-  totalPatterns: number;
-  totalActions: number;
-  patternHitRate: number;
-  successRate: number;
-  topDomains: Array<{ domain: string; patterns: number }>;
-}
-
-async function loadLearningStats() {
-  try {
-    const stats = await sendMessage({ type: 'GET_LEARNING_STATS' }) as LearningStats | undefined;
-
-    if (stats) {
-      statPatterns.textContent = String(stats.totalPatterns);
-      statActions.textContent = String(stats.totalActions);
-      statHitRate.textContent = `${Math.round(stats.patternHitRate * 100)}%`;
-      statSuccessRate.textContent = `${Math.round(stats.successRate * 100)}%`;
-
-      if (stats.topDomains.length > 0) {
-        topDomains.innerHTML = stats.topDomains.map(d =>
-          `<li><span>${d.domain}</span><span class="domain-count">${d.patterns}</span></li>`
-        ).join('');
-      } else {
-        topDomains.innerHTML = '<li class="empty-state">No patterns learned yet</li>';
-      }
-    }
-
-    const settings = await sendMessage({ type: 'GET_LEARNING_SETTINGS' }) as { enableLearning: boolean } | undefined;
-    if (settings) {
-      learningEnabled.checked = settings.enableLearning;
-    }
-  } catch (error) {
-    console.error('[SidePanel] Failed to load learning stats:', error);
-  }
-}
-
-learningEnabled.addEventListener('change', async () => {
-  await sendMessage({ type: 'SET_LEARNING_ENABLED', payload: { enabled: learningEnabled.checked } });
-});
-
-btnClearPatterns.addEventListener('click', async () => {
-  if (confirm('Clear all learned patterns? This cannot be undone.')) {
-    await sendMessage({ type: 'CLEAR_PATTERNS' });
-    loadLearningStats();
-  }
-});
-
-btnExportPatterns.addEventListener('click', async () => {
-  const patterns = await sendMessage({ type: 'EXPORT_PATTERNS' }) as unknown[];
-  if (patterns && patterns.length > 0) {
-    const blob = new Blob([JSON.stringify(patterns, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `clawku-patterns-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  } else {
-    alert('No patterns to export');
   }
 });
 
