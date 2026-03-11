@@ -1,6 +1,10 @@
 import { wsConnection } from './websocket.js';
 import { pair, disconnect, getStatus, getStoredCredentials } from './auth.js';
 import { executeCommand, createResultPayload } from './browser-commands.js';
+import { patternCache } from './pattern-cache.js';
+import { handleConsentResponse, getPendingConsents } from './consent-manager.js';
+import { handleFeedbackResponse, getPendingFeedbacks } from './feedback-collector.js';
+import { getLearningStats, clearLearning, setLearningEnabled, isLearningEnabled } from './learning-wrapper.js';
 import type { BrowserJobMessage, PopupMessage } from '../types/messages.js';
 
 console.log('[ServiceWorker] Starting Clawku Browser Extension');
@@ -200,6 +204,64 @@ chrome.runtime.onMessage.addListener((message: PopupMessage, sender, sendRespons
 
       case 'CLEAR_ACTIVITIES': {
         await chrome.storage.local.set({ activities: [] });
+        sendResponse({ success: true });
+        break;
+      }
+
+      // Learning/Pattern Cache
+      case 'GET_LEARNING_STATS': {
+        const stats = await getLearningStats();
+        sendResponse(stats);
+        break;
+      }
+
+      case 'GET_LEARNING_SETTINGS': {
+        const settings = await patternCache.getSettings();
+        sendResponse(settings);
+        break;
+      }
+
+      case 'SET_LEARNING_ENABLED': {
+        const enabled = message.payload?.enabled ?? true;
+        await setLearningEnabled(enabled);
+        sendResponse({ success: true });
+        break;
+      }
+
+      case 'CLEAR_PATTERNS': {
+        await clearLearning();
+        sendResponse({ success: true });
+        break;
+      }
+
+      case 'EXPORT_PATTERNS': {
+        const patterns = await patternCache.exportPatterns();
+        sendResponse(patterns);
+        break;
+      }
+
+      // Consent handling
+      case 'GET_PENDING_CONSENTS': {
+        const pending = getPendingConsents();
+        sendResponse(pending);
+        break;
+      }
+
+      case 'CONSENT_RESPONSE': {
+        await handleConsentResponse(message.payload);
+        sendResponse({ success: true });
+        break;
+      }
+
+      // Feedback handling
+      case 'GET_PENDING_FEEDBACKS': {
+        const pending = getPendingFeedbacks();
+        sendResponse(pending);
+        break;
+      }
+
+      case 'FEEDBACK_RESPONSE': {
+        await handleFeedbackResponse(message.payload);
         sendResponse({ success: true });
         break;
       }
