@@ -995,10 +995,12 @@ async function typeAtCoordinates(params: BrowserActionParams): Promise<CommandRe
                 resolve({ typed: true, element: activeEl.tagName, method: 'value' });
               } else if (activeEl && (activeEl as HTMLElement).isContentEditable) {
                 // Use execCommand for contenteditable (works on shadow DOM)
+                // Select all existing content so insertText REPLACES instead of appending
+                // This prevents double-typing on retry attempts
                 const selection = window.getSelection();
                 if (selection) {
                   selection.selectAllChildren(activeEl);
-                  selection.collapseToEnd();
+                  // Don't collapseToEnd - keep selection so insertText replaces
                 }
                 const inserted = document.execCommand('insertText', false, inputText);
                 activeEl.dispatchEvent(new InputEvent('input', { bubbles: true, data: inputText, inputType: 'insertText' }));
@@ -1017,10 +1019,11 @@ async function typeAtCoordinates(params: BrowserActionParams): Promise<CommandRe
                 }
                 if (editableEl && editableEl.isContentEditable) {
                   editableEl.focus();
+                  // Select all existing content so insertText REPLACES instead of appending
                   const selection = window.getSelection();
                   if (selection) {
                     selection.selectAllChildren(editableEl);
-                    selection.collapseToEnd();
+                    // Don't collapseToEnd - keep selection so insertText replaces
                   }
                   const inserted = document.execCommand('insertText', false, inputText);
                   editableEl.dispatchEvent(new InputEvent('input', { bubbles: true, data: inputText, inputType: 'insertText' }));
@@ -1079,11 +1082,12 @@ async function typeAtCoordinates(params: BrowserActionParams): Promise<CommandRe
                 resolve({ typed: true, element: activeEl.tagName, method: 'value' });
               } else if (activeEl && activeEl.isContentEditable) {
                 // Use execCommand for contenteditable (works on shadow DOM)
-                // First place cursor at end, then insert text
+                // Select all existing content so insertText REPLACES instead of appending
+                // This prevents double-typing on retry attempts
                 const selection = window.getSelection();
                 if (selection) {
                   selection.selectAllChildren(activeEl);
-                  selection.collapseToEnd();
+                  // Don't collapseToEnd - keep selection so insertText replaces
                 }
                 const inserted = document.execCommand('insertText', false, inputText);
                 activeEl.dispatchEvent(new InputEvent('input', { bubbles: true, data: inputText, inputType: 'insertText' }));
@@ -1096,10 +1100,11 @@ async function typeAtCoordinates(params: BrowserActionParams): Promise<CommandRe
                 }
                 if (editableEl && editableEl.isContentEditable) {
                   editableEl.focus();
+                  // Select all existing content so insertText REPLACES instead of appending
                   const selection = window.getSelection();
                   if (selection) {
                     selection.selectAllChildren(editableEl);
-                    selection.collapseToEnd();
+                    // Don't collapseToEnd - keep selection so insertText replaces
                   }
                   const inserted = document.execCommand('insertText', false, inputText);
                   editableEl.dispatchEvent(new InputEvent('input', { bubbles: true, data: inputText, inputType: 'insertText' }));
