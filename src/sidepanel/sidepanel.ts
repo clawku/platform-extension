@@ -244,7 +244,7 @@ async function handlePair() {
   try {
     const result = (await sendMessage({
       type: 'PAIR',
-      payload: { code, apiUrl },
+      payload: { code, apiBaseUrl: apiUrl },
     })) as { success: boolean; error?: string };
 
     if (result?.success) {

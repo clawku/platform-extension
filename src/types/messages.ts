@@ -247,6 +247,7 @@ export interface PopupMessage {
   payload?: {
     code?: string;
     apiBaseUrl?: string;
+    apiUrl?: string;
   };
 }
 
@@ -256,4 +257,7 @@ export interface ConnectionStatus {
   personaName?: string;
   lastSeen?: number;
   error?: string;
+  userEmail?: string;
+  extensionId?: string;
+  apiUrl?: string;
 }

@@ -91,6 +91,8 @@ export async function getStatus(): Promise<ConnectionStatus> {
     'token',
     'personaName',
     'pairedAt',
+    'userId',
+    'apiBaseUrl',
   ])) as ExtensionStorage;
 
   if (!storage.token) {
@@ -108,6 +110,9 @@ export async function getStatus(): Promise<ConnectionStatus> {
     connected: wsStatus.wsConnected === true,
     personaName: storage.personaName,
     lastSeen: storage.pairedAt,
+    userEmail: storage.userId,
+    extensionId: chrome.runtime.id,
+    apiUrl: storage.apiBaseUrl || 'https://api.clawku.ai',
   };
 }
 
