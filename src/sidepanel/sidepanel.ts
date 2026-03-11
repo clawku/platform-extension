@@ -16,10 +16,12 @@ import {
   isChatWebSocketConnected,
   sendChatMessageWS,
   sendOrchestrationMessageWS,
+  prepareFileAttachment,
   type Persona,
   type ChatMessage,
   type OrchestrationRoom,
   type OrchestrationMessage,
+  type ChatAttachment,
 } from '../popup/api.js';
 
 // ============ Element References ============
@@ -82,6 +84,10 @@ let selectedRoomId: string | null = null;
 let chatHistory: ChatMessage[] = [];
 let orchestrationHistory: OrchestrationMessage[] = [];
 let streamingMessages = new Map<string, string>();
+let chatPendingAttachments: ChatAttachment[] = [];
+let teamPendingAttachments: ChatAttachment[] = [];
+let isUploadingChat = false;
+let isUploadingTeam = false;
 
 // ============ State Management ============
 
@@ -413,23 +419,36 @@ async function finalizeChatMessage(content: string) {
 
 async function handleSendChat() {
   const message = chatInput.value.trim();
-  if (!message || !selectedPersonaId) return;
+  const hasAttachments = chatPendingAttachments.length > 0;
+
+  if ((!message && !hasAttachments) || !selectedPersonaId) return;
 
   chatInput.disabled = true;
   (btnSendChat as HTMLButtonElement).disabled = true;
   chatInput.value = '';
 
-  appendMessage(chatMessages, 'user', message);
-  chatHistory.push({ role: 'user', content: message });
+  // Capture attachments and clear them
+  const attachments = hasAttachments ? [...chatPendingAttachments] : undefined;
+  clearChatAttachments();
+
+  // Build display message (include attachment info)
+  let displayMessage = message;
+  if (attachments && attachments.length > 0) {
+    const fileNames = attachments.map(a => a.filename).join(', ');
+    displayMessage = message ? `${message}\n📎 ${fileNames}` : `📎 ${fileNames}`;
+  }
+
+  appendMessage(chatMessages, 'user', displayMessage);
+  chatHistory.push({ role: 'user', content: displayMessage });
   await saveChatHistory(selectedPersonaId, chatHistory);
 
   if (isChatWebSocketConnected()) {
-    sendChatMessageWS(selectedPersonaId, message);
+    sendChatMessageWS(selectedPersonaId, message, attachments);
   } else {
     initChatWebSocket();
     setTimeout(() => {
       if (isChatWebSocketConnected()) {
-        sendChatMessageWS(selectedPersonaId!, message);
+        sendChatMessageWS(selectedPersonaId!, message, attachments);
       } else {
         appendMessage(chatMessages, 'assistant', 'Failed to connect. Please try again.');
         enableInputs();
@@ -553,30 +572,43 @@ async function finalizeTeamMessage(personaId: string, name: string, content: str
 
 async function handleSendTeam() {
   const message = teamInput.value.trim();
-  if (!message || !selectedRoomId) return;
+  const hasAttachments = teamPendingAttachments.length > 0;
+
+  if ((!message && !hasAttachments) || !selectedRoomId) return;
 
   teamInput.disabled = true;
   (btnSendTeam as HTMLButtonElement).disabled = true;
   teamInput.value = '';
 
-  appendTeamMessage('user', 'You', message);
+  // Capture attachments and clear them
+  const attachments = hasAttachments ? [...teamPendingAttachments] : undefined;
+  clearTeamAttachments();
+
+  // Build display message (include attachment info)
+  let displayMessage = message;
+  if (attachments && attachments.length > 0) {
+    const fileNames = attachments.map(a => a.filename).join(', ');
+    displayMessage = message ? `${message}\n📎 ${fileNames}` : `📎 ${fileNames}`;
+  }
+
+  appendTeamMessage('user', 'You', displayMessage);
   orchestrationHistory.push({
     id: '',
     role: 'user',
     personaId: null,
     personaName: null,
-    content: message,
+    content: displayMessage,
     createdAt: new Date().toISOString(),
   });
   await saveOrchestrationHistory(selectedRoomId, orchestrationHistory);
 
   if (isChatWebSocketConnected()) {
-    sendOrchestrationMessageWS(selectedRoomId, message);
+    sendOrchestrationMessageWS(selectedRoomId, message, attachments);
   } else {
     initChatWebSocket();
     setTimeout(() => {
       if (isChatWebSocketConnected()) {
-        sendOrchestrationMessageWS(selectedRoomId!, message);
+        sendOrchestrationMessageWS(selectedRoomId!, message, attachments);
       } else {
         appendTeamMessage('assistant', 'System', 'Failed to connect. Please try again.');
         enableInputs();
@@ -625,6 +657,139 @@ function autoResize(textarea: HTMLTextAreaElement) {
   textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
 }
 
+function truncateFilename(filename: string, maxLength: number): string {
+  if (filename.length <= maxLength) return filename;
+  const ext = filename.lastIndexOf('.');
+  if (ext > 0 && filename.length - ext <= 5) {
+    const name = filename.slice(0, ext);
+    const extension = filename.slice(ext);
+    return name.slice(0, maxLength - extension.length - 3) + '...' + extension;
+  }
+  return filename.slice(0, maxLength - 3) + '...';
+}
+
+// ============ Attachment Handling ============
+
+function renderAttachmentPreview(
+  container: HTMLElement,
+  attachments: ChatAttachment[],
+  onRemove: (index: number) => void
+) {
+  if (attachments.length === 0) {
+    container.classList.add('hidden');
+    container.innerHTML = '';
+    return;
+  }
+
+  container.classList.remove('hidden');
+  container.innerHTML = '';
+
+  attachments.forEach((attachment, index) => {
+    const item = document.createElement('div');
+    item.className = 'attachment-item';
+
+    const isImage = attachment.mimeType.startsWith('image/');
+    const icon = isImage ? '🖼️' : '📄';
+
+    item.innerHTML = `
+      <span class="attachment-icon">${icon}</span>
+      <span class="attachment-name" title="${escapeHtml(attachment.filename)}">${escapeHtml(truncateFilename(attachment.filename, 20))}</span>
+      <button class="attachment-remove" data-index="${index}" title="Remove">×</button>
+    `;
+
+    const removeBtn = item.querySelector('.attachment-remove');
+    removeBtn?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      onRemove(index);
+    });
+
+    container.appendChild(item);
+  });
+}
+
+async function handleChatFileSelect(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const files = input.files;
+  if (!files || files.length === 0) return;
+
+  isUploadingChat = true;
+  btnAttachChat.classList.add('uploading');
+
+  try {
+    for (const file of Array.from(files)) {
+      const attachment = await prepareFileAttachment(file);
+      chatPendingAttachments.push(attachment);
+    }
+    renderAttachmentPreview(chatAttachments, chatPendingAttachments, removeChatAttachment);
+    updateChatSendButton();
+  } catch (error) {
+    console.error('Failed to prepare attachment:', error);
+    alert('Failed to upload file. Please try again.');
+  } finally {
+    isUploadingChat = false;
+    btnAttachChat.classList.remove('uploading');
+    input.value = '';
+  }
+}
+
+async function handleTeamFileSelect(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const files = input.files;
+  if (!files || files.length === 0) return;
+
+  isUploadingTeam = true;
+  btnAttachTeam.classList.add('uploading');
+
+  try {
+    for (const file of Array.from(files)) {
+      const attachment = await prepareFileAttachment(file);
+      teamPendingAttachments.push(attachment);
+    }
+    renderAttachmentPreview(teamAttachments, teamPendingAttachments, removeTeamAttachment);
+    updateTeamSendButton();
+  } catch (error) {
+    console.error('Failed to prepare attachment:', error);
+    alert('Failed to upload file. Please try again.');
+  } finally {
+    isUploadingTeam = false;
+    btnAttachTeam.classList.remove('uploading');
+    input.value = '';
+  }
+}
+
+function removeChatAttachment(index: number) {
+  chatPendingAttachments.splice(index, 1);
+  renderAttachmentPreview(chatAttachments, chatPendingAttachments, removeChatAttachment);
+  updateChatSendButton();
+}
+
+function removeTeamAttachment(index: number) {
+  teamPendingAttachments.splice(index, 1);
+  renderAttachmentPreview(teamAttachments, teamPendingAttachments, removeTeamAttachment);
+  updateTeamSendButton();
+}
+
+function updateChatSendButton() {
+  const hasContent = chatInput.value.trim().length > 0 || chatPendingAttachments.length > 0;
+  (btnSendChat as HTMLButtonElement).disabled = !hasContent || !selectedPersonaId;
+}
+
+function updateTeamSendButton() {
+  const hasContent = teamInput.value.trim().length > 0 || teamPendingAttachments.length > 0;
+  (btnSendTeam as HTMLButtonElement).disabled = !hasContent || !selectedRoomId;
+}
+
+function clearChatAttachments() {
+  chatPendingAttachments = [];
+  renderAttachmentPreview(chatAttachments, chatPendingAttachments, removeChatAttachment);
+}
+
+function clearTeamAttachments() {
+  teamPendingAttachments = [];
+  renderAttachmentPreview(teamAttachments, teamPendingAttachments, removeTeamAttachment);
+}
+
 // ============ Event Listeners ============
 
 // Navigation
@@ -660,12 +825,12 @@ personaSelect.addEventListener('change', () => {
     chatHistory = [];
     renderChatMessages();
   }
-  (btnSendChat as HTMLButtonElement).disabled = !chatInput.value.trim() || !selectedPersonaId;
+  updateChatSendButton();
 });
 
 chatInput.addEventListener('input', () => {
   autoResize(chatInput);
-  (btnSendChat as HTMLButtonElement).disabled = !chatInput.value.trim() || !selectedPersonaId;
+  updateChatSendButton();
 });
 
 chatInput.addEventListener('keypress', (e) => {
@@ -677,6 +842,14 @@ chatInput.addEventListener('keypress', (e) => {
 
 btnSendChat.addEventListener('click', handleSendChat);
 btnClearChat.addEventListener('click', handleClearChatHistory);
+
+// Chat attachments
+btnAttachChat.addEventListener('click', () => {
+  if (!isUploadingChat) {
+    chatFileInput.click();
+  }
+});
+chatFileInput.addEventListener('change', handleChatFileSelect);
 
 // Team
 roomSelect.addEventListener('change', async () => {
@@ -692,12 +865,12 @@ roomSelect.addEventListener('change', async () => {
       renderTeamMessages();
     }
   }
-  (btnSendTeam as HTMLButtonElement).disabled = !teamInput.value.trim() || !selectedRoomId;
+  updateTeamSendButton();
 });
 
 teamInput.addEventListener('input', () => {
   autoResize(teamInput);
-  (btnSendTeam as HTMLButtonElement).disabled = !teamInput.value.trim() || !selectedRoomId;
+  updateTeamSendButton();
 });
 
 teamInput.addEventListener('keypress', (e) => {
@@ -708,6 +881,14 @@ teamInput.addEventListener('keypress', (e) => {
 });
 
 btnSendTeam.addEventListener('click', handleSendTeam);
+
+// Team attachments
+btnAttachTeam.addEventListener('click', () => {
+  if (!isUploadingTeam) {
+    teamFileInput.click();
+  }
+});
+teamFileInput.addEventListener('change', handleTeamFileSelect);
 
 btnRoomMenu.addEventListener('click', () => {
   roomMenu.classList.toggle('hidden');
