@@ -81,8 +81,7 @@ const btnSendTeam = document.getElementById('btn-send-team')!;
 const teamFileInput = document.getElementById('team-file-input') as HTMLInputElement;
 
 // Settings
-const userEmail = document.getElementById('user-email')!;
-const personaNameDisplay = document.getElementById('persona-name-display')!;
+const personaNameEl = document.getElementById('user-email')!;
 const apiUrlDisplay = document.getElementById('api-url-display')!;
 const btnDisconnect = document.getElementById('btn-disconnect')!;
 
@@ -291,8 +290,7 @@ async function handleDisconnect() {
 async function loadSettings() {
   const status = (await sendMessage({ type: 'GET_STATUS' })) as ConnectionStatus | undefined;
   if (status) {
-    userEmail.textContent = status.userEmail || '-';
-    personaNameDisplay.textContent = status.personaName || '-';
+    personaNameEl.textContent = status.personaName || '-';
     apiUrlDisplay.textContent = status.apiUrl || 'Default';
   }
 }
