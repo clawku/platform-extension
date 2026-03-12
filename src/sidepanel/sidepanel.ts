@@ -82,7 +82,7 @@ const teamFileInput = document.getElementById('team-file-input') as HTMLInputEle
 
 // Settings
 const userEmail = document.getElementById('user-email')!;
-const extensionIdEl = document.getElementById('extension-id')!;
+const personaNameDisplay = document.getElementById('persona-name-display')!;
 const apiUrlDisplay = document.getElementById('api-url-display')!;
 const btnDisconnect = document.getElementById('btn-disconnect')!;
 
@@ -292,7 +292,7 @@ async function loadSettings() {
   const status = (await sendMessage({ type: 'GET_STATUS' })) as ConnectionStatus | undefined;
   if (status) {
     userEmail.textContent = status.userEmail || '-';
-    extensionIdEl.textContent = status.extensionId?.slice(0, 12) + '...' || '-';
+    personaNameDisplay.textContent = status.personaName || '-';
     apiUrlDisplay.textContent = status.apiUrl || 'Default';
   }
 }
