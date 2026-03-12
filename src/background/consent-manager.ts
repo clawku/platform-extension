@@ -41,9 +41,11 @@ export async function requestConsent(params: {
   patternMatch?: { patternId: string; confidence: number };
 }): Promise<boolean> {
   const domain = extractDomain(params.url);
+  console.log(`[Consent] requestConsent: action=${params.action}, domain="${domain}", url=${params.url}`);
 
   // Check existing consent preference
   const consent = await patternCache.getConsent(domain);
+  console.log(`[Consent] Existing consent for ${domain}:`, consent);
 
   if (consent) {
     if (consent.level === 'deny') {
@@ -68,6 +70,7 @@ export async function requestConsent(params: {
   }
 
   // Need to ask user
+  console.log(`[Consent] No auto-approve, showing prompt to user`);
   const actionId = `action_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
   const pendingAction: PendingAction = {
@@ -118,6 +121,7 @@ export async function handleConsentResponse(params: {
   rememberForDomain?: boolean;
   rememberForPattern?: boolean;
 }): Promise<void> {
+  console.log(`[Consent] handleConsentResponse:`, params);
   const pending = pendingActions.get(params.actionId);
   if (!pending) {
     console.log(`[Consent] No pending action found for ${params.actionId}`);
@@ -129,13 +133,14 @@ export async function handleConsentResponse(params: {
 
   // Save consent preference if requested
   if (params.rememberForDomain) {
+    // Allow ALL learnable actions for this domain, not just the current one
     await patternCache.setConsent({
       domain: pending.action.domain,
       level: params.approved ? 'allow_domain' : 'deny',
-      allowedActions: params.approved ? [pending.action.action] : undefined,
+      allowedActions: undefined, // undefined = all actions allowed
       createdAt: Date.now(),
     });
-    console.log(`[Consent] Saved preference for ${pending.action.domain}: ${params.approved ? 'allow' : 'deny'}`);
+    console.log(`[Consent] Saved preference for ${pending.action.domain}: ${params.approved ? 'allow ALL' : 'deny'}`);
   }
 
   // Update badge
@@ -206,13 +211,23 @@ function notifyConsentListeners(action: PendingAction): void {
 }
 
 /**
- * Show badge indicating pending consent
+ * Show badge indicating pending consent and auto-open sidepanel
  */
-function showConsentBadge(): void {
+async function showConsentBadge(): Promise<void> {
   const count = pendingActions.size;
   if (count > 0) {
     chrome.action.setBadgeText({ text: String(count) });
     chrome.action.setBadgeBackgroundColor({ color: '#FF9800' }); // Orange for attention
+
+    // Auto-open sidepanel for consent
+    try {
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (activeTab?.id) {
+        await chrome.sidePanel.open({ tabId: activeTab.id });
+      }
+    } catch (e) {
+      console.log('[Consent] Could not auto-open sidepanel:', e);
+    }
   }
 }
 

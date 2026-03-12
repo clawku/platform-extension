@@ -915,141 +915,86 @@ async function typeAtCoordinates(params: BrowserActionParams): Promise<CommandRe
     }
   }
 
-  // For shadow DOM sites, use HYBRID approach:
+  // For shadow DOM sites, use PURE CDP approach:
   // 1. CDP click (trusted event, actually focuses the element)
-  // 2. Content script type (execCommand works on shadow DOM)
-  // This solves the issue where content script clicks (isTrusted=false) don't focus on TikTok
+  // 2. CDP Input.insertText (bypasses shadow DOM completely)
+  // Content scripts can't see into shadow DOM, so we must use CDP for BOTH click and type
   if (useContentScript) {
-    console.log('[type_at] Using hybrid CDP click + content script type (shadow DOM compatible)');
+    console.log('[type_at] Shadow DOM detected - using PURE CDP (click + insertText)');
 
-    // Step 1: Click via CDP to focus (trusted event)
-    if (chrome.debugger) {
-      try {
-        const target = { tabId };
-        await chrome.debugger.attach(target, '1.3');
-        console.log('[type_at] CDP click to focus at', x, y);
-
-        // Mouse move first
-        await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
-          type: 'mouseMoved',
-          x,
-          y,
-        });
-        await new Promise(resolve => setTimeout(resolve, 30));
-
-        // Mouse down + up = click
-        await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
-          type: 'mousePressed',
-          x,
-          y,
-          button: 'left',
-          clickCount: 1,
-        });
-        await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
-          type: 'mouseReleased',
-          x,
-          y,
-          button: 'left',
-          clickCount: 1,
-        });
-
-        await chrome.debugger.detach(target);
-        console.log('[type_at] CDP click done, waiting for focus');
-      } catch (e) {
-        console.log('[type_at] CDP click failed, falling back to content script click:', e);
-        // Continue with content script click as fallback
-      }
+    if (!chrome.debugger) {
+      return { success: false, error: 'CDP not available for shadow DOM typing' };
     }
 
-    // Small delay for focus to take effect
-    await new Promise(resolve => setTimeout(resolve, 150));
-
-    // Step 2: Type via content script execCommand (works on shadow DOM)
+    const target = { tabId };
     try {
-      const results = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: (clickX: number, clickY: number, inputText: string) => {
-          // Check what's focused after CDP click
-          let activeEl = document.activeElement as HTMLInputElement | HTMLTextAreaElement | HTMLElement;
+      await chrome.debugger.attach(target, '1.3');
+      console.log('[type_at] CDP attached, clicking at', x, y);
 
-          // If nothing focused or body focused, try clicking again with JS as fallback
-          if (!activeEl || activeEl === document.body || activeEl === document.documentElement) {
-            const element = document.elementFromPoint(clickX, clickY) as HTMLElement;
-            if (element) {
-              element.click();
-              element.focus();
-              activeEl = document.activeElement as HTMLElement;
-            }
-          }
-
-          // Small delay
-          return new Promise(resolve => {
-            setTimeout(() => {
-              activeEl = document.activeElement as HTMLInputElement | HTMLTextAreaElement | HTMLElement;
-
-              // Try to type - check if it's an input/textarea
-              if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) {
-                (activeEl as HTMLInputElement).value = inputText;
-                activeEl.dispatchEvent(new Event('input', { bubbles: true }));
-                activeEl.dispatchEvent(new Event('change', { bubbles: true }));
-                resolve({ typed: true, element: activeEl.tagName, method: 'value' });
-              } else if (activeEl && (activeEl as HTMLElement).isContentEditable) {
-                // Use execCommand for contenteditable (works on shadow DOM)
-                // Select all existing content so insertText REPLACES instead of appending
-                // This prevents double-typing on retry attempts
-                const selection = window.getSelection();
-                if (selection) {
-                  selection.selectAllChildren(activeEl);
-                  // Don't collapseToEnd - keep selection so insertText replaces
-                }
-                const inserted = document.execCommand('insertText', false, inputText);
-                activeEl.dispatchEvent(new InputEvent('input', { bubbles: true, data: inputText, inputType: 'insertText' }));
-                resolve({ typed: inserted, element: 'contenteditable', method: 'execCommand', text: inputText });
-              } else {
-                // Fallback: find contenteditable near click point or in ancestors
-                const clickedEl = document.elementFromPoint(clickX, clickY) as HTMLElement;
-                if (!clickedEl) {
-                  resolve({ typed: false, error: 'No element at coordinates' });
-                  return;
-                }
-
-                let editableEl: HTMLElement | null = clickedEl;
-                while (editableEl && !editableEl.isContentEditable) {
-                  editableEl = editableEl.parentElement;
-                }
-                if (editableEl && editableEl.isContentEditable) {
-                  editableEl.focus();
-                  // Select all existing content so insertText REPLACES instead of appending
-                  const selection = window.getSelection();
-                  if (selection) {
-                    selection.selectAllChildren(editableEl);
-                    // Don't collapseToEnd - keep selection so insertText replaces
-                  }
-                  const inserted = document.execCommand('insertText', false, inputText);
-                  editableEl.dispatchEvent(new InputEvent('input', { bubbles: true, data: inputText, inputType: 'insertText' }));
-                  resolve({ typed: inserted, element: 'contenteditable-ancestor', method: 'execCommand', text: inputText });
-                } else {
-                  // Last resort: try execCommand on document anyway
-                  const inserted = document.execCommand('insertText', false, inputText);
-                  if (inserted) {
-                    resolve({ typed: true, element: 'document', method: 'execCommand-fallback', text: inputText });
-                  } else {
-                    resolve({ typed: false, element: clickedEl.tagName, method: 'failed', error: 'No editable element found' });
-                  }
-                }
-              }
-            }, 100);
-          });
-        },
-        args: [x, y, text],
+      // Mouse move first
+      await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x,
+        y,
       });
-      const result = results[0]?.result as { typed: boolean; element?: string; method?: string; error?: string; text?: string } | undefined;
-      if (result?.typed) {
-        return { success: true, result: { ...result, x, y, viewportCoords: true, clickMethod: 'cdp' } };
+      await new Promise(resolve => setTimeout(resolve, 30));
+
+      // Mouse down + up = click to focus
+      await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+        type: 'mousePressed',
+        x,
+        y,
+        button: 'left',
+        clickCount: 1,
+      });
+      await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x,
+        y,
+        button: 'left',
+        clickCount: 1,
+      });
+
+      // Wait for focus to take effect
+      await new Promise(resolve => setTimeout(resolve, 150));
+
+      // Type via CDP dispatchKeyEvent - character by character
+      // Must use: keyDown (no text) -> char (with text) -> keyUp (no text)
+      // The 'char' event is what actually inserts the character
+      console.log('[type_at] CDP typing:', text);
+      for (const char of text) {
+        // keyDown - just the key press, no text
+        await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+          type: 'keyDown',
+          key: char,
+          windowsVirtualKeyCode: char.charCodeAt(0),
+          nativeVirtualKeyCode: char.charCodeAt(0),
+        });
+        // char - this is what actually inserts the character
+        await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+          type: 'char',
+          text: char,
+          unmodifiedText: char,
+        });
+        // keyUp - just the key release, no text
+        await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
+          type: 'keyUp',
+          key: char,
+          windowsVirtualKeyCode: char.charCodeAt(0),
+          nativeVirtualKeyCode: char.charCodeAt(0),
+        });
+        // Small delay between characters
+        await new Promise(resolve => setTimeout(resolve, 10));
       }
-      return { success: false, error: result?.error || 'Content script type_at failed' };
-    } catch (err) {
-      return { success: false, error: `Content script type_at failed: ${err}` };
+
+      await chrome.debugger.detach(target);
+      console.log('[type_at] CDP pure type complete');
+
+      return { success: true, result: { typed: true, x, y, method: 'cdp-pure-keyevents', text } };
+    } catch (e) {
+      try { await chrome.debugger.detach(target); } catch {}
+      console.error('[type_at] CDP pure failed:', e);
+      return { success: false, error: `CDP type failed: ${e}` };
     }
   }
 

@@ -1,10 +1,10 @@
 import { wsConnection } from './websocket.js';
 import { pair, disconnect, getStatus, getStoredCredentials } from './auth.js';
-import { executeCommand, createResultPayload } from './browser-commands.js';
+import { createResultPayload } from './browser-commands.js';
 import { patternCache } from './pattern-cache.js';
 import { handleConsentResponse, getPendingConsents } from './consent-manager.js';
 import { handleFeedbackResponse, getPendingFeedbacks } from './feedback-collector.js';
-import { getLearningStats, clearLearning, setLearningEnabled, isLearningEnabled } from './learning-wrapper.js';
+import { getLearningStats, clearLearning, setLearningEnabled, isLearningEnabled, executeWithLearning } from './learning-wrapper.js';
 import type { BrowserJobMessage, PopupMessage } from '../types/messages.js';
 
 console.log('[ServiceWorker] Starting Clawku Browser Extension');
@@ -100,8 +100,8 @@ wsConnection.setMessageHandler(async (message: BrowserJobMessage) => {
     return;
   }
 
-  // Execute the command
-  const commandResult = await executeCommand(action, params);
+  // Execute the command with learning integration (consent + feedback + pattern cache)
+  const commandResult = await executeWithLearning(action, params, jobId);
 
   // Log result
   const { activities = [] } = await chrome.storage.local.get('activities');
@@ -248,6 +248,7 @@ chrome.runtime.onMessage.addListener((message: PopupMessage, sender, sendRespons
       }
 
       case 'CONSENT_RESPONSE': {
+        console.log('[ServiceWorker] CONSENT_RESPONSE received:', message.payload);
         await handleConsentResponse(message.payload);
         sendResponse({ success: true });
         break;

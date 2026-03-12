@@ -54,6 +54,18 @@ const ACTION_MAP: Record<string, LearnableAction | null> = {
 };
 
 /**
+ * Get learnable action from action + kind params
+ * Handles the "act" action which uses "kind" to specify the actual action type
+ */
+function getLearnableAction(action: string, params: BrowserActionParams): LearnableAction | null {
+  // For "act" actions, check the "kind" param
+  if (action === 'act' && params.kind) {
+    return ACTION_MAP[params.kind] ?? null;
+  }
+  return ACTION_MAP[action] ?? null;
+}
+
+/**
  * Execute a browser action with learning integration
  *
  * @param action - The browser action to execute
@@ -73,7 +85,8 @@ export async function executeWithLearning(
   usedPattern?: boolean;
   patternId?: string;
 }> {
-  const learnableAction = ACTION_MAP[action];
+  const learnableAction = getLearnableAction(action, params);
+  console.log(`[Learning] action=${action}, kind=${params.kind}, learnableAction=${learnableAction}`);
 
   // If not learnable or learning disabled, execute directly
   if (!learnableAction || !learningEnabled) {
@@ -116,8 +129,10 @@ export async function executeWithLearning(
 
   // Step 2: Check if consent needed
   const needsConsent = !shouldSkipConsent(learnableAction);
+  console.log(`[Learning] needsConsent=${needsConsent} for action=${learnableAction}`);
 
   if (needsConsent) {
+    console.log('[Learning] Requesting consent...');
     const approved = await requestConsent({
       jobId,
       action: learnableAction,

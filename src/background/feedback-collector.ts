@@ -251,13 +251,23 @@ function notifyFeedbackListeners(feedback: PendingFeedback): void {
 }
 
 /**
- * Show badge indicating pending feedback
+ * Show badge indicating pending feedback and auto-open sidepanel
  */
-function showFeedbackBadge(): void {
+async function showFeedbackBadge(): Promise<void> {
   const count = pendingFeedback.size;
   if (count > 0) {
     chrome.action.setBadgeText({ text: String(count) });
     chrome.action.setBadgeBackgroundColor({ color: '#4CAF50' }); // Green for feedback
+
+    // Auto-open sidepanel for feedback
+    try {
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (activeTab?.id) {
+        await chrome.sidePanel.open({ tabId: activeTab.id });
+      }
+    } catch (e) {
+      console.log('[Feedback] Could not auto-open sidepanel:', e);
+    }
   }
 }
 

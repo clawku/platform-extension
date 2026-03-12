@@ -988,12 +988,14 @@ btnConsentDeny.addEventListener('click', () => {
 
 btnConsentAllow.addEventListener('click', () => {
   if (currentConsentActionId) {
+    const remember = consentRememberCheckbox.checked;
+    console.log('[Sidepanel] Allow clicked, remember:', remember, 'actionId:', currentConsentActionId);
     sendMessage({
       type: 'CONSENT_RESPONSE',
       payload: {
         actionId: currentConsentActionId,
         approved: true,
-        rememberForDomain: consentRememberCheckbox.checked,
+        rememberForDomain: remember,
       },
     });
     hideConsentPrompt();
@@ -1032,3 +1034,18 @@ chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
 // ============ Initialize ============
 
 loadStatus();
+
+// Check for pending consents/feedbacks on load
+chrome.runtime.sendMessage({ type: 'GET_PENDING_CONSENTS' }, (response) => {
+  if (response && response.length > 0) {
+    console.log('[Sidepanel] Found pending consent:', response[0]);
+    showConsentPrompt(response[0]);
+  }
+});
+
+chrome.runtime.sendMessage({ type: 'GET_PENDING_FEEDBACKS' }, (response) => {
+  if (response && response.length > 0) {
+    console.log('[Sidepanel] Found pending feedback:', response[0]);
+    showFeedbackPrompt(response[0]);
+  }
+});
