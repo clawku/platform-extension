@@ -62,10 +62,7 @@ export function extractDomain(url: string): string {
   }
 }
 
-/**
- * Convert URL path to pattern (wildcarded)
- * e.g., "/user/123/profile" -> "/user/*/profile"
- */
+/** Convert URL path to pattern with numeric segments replaced by wildcard */
 export function toPathPattern(url: string): string {
   try {
     const parsed = new URL(url);
