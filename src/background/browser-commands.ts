@@ -674,11 +674,11 @@ async function clickAtCoordinates(params: BrowserActionParams): Promise<CommandR
 
   const target = { tabId };
 
-  // Use content script for shadow DOM sites (useContentScript=true) or when debugger unavailable
-  const useContentScript = params.useContentScript || !chrome.debugger;
-
-  if (useContentScript) {
-    console.log('[click_at] Using content script method (shadow DOM compatible)');
+  // Always prefer CDP for clicking - it works at browser level, no DOM access needed
+  // Content script click can't pierce shadow DOM (elementFromPoint returns shadow host)
+  // Only fall back to content script if debugger is unavailable
+  if (!chrome.debugger) {
+    console.log('[click_at] Using content script fallback (no debugger available)');
     const clickCount = params.count || 1;
     const clickDelay = params.delay || 0;
 
