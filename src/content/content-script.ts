@@ -9,6 +9,26 @@ console.log('[ContentScript] Clawku Browser Extension loaded');
 // Store element references from snapshots
 const elementRefs = new Map<string, Element>();
 
+// Get deep active element - pierces through shadow DOM
+function getDeepActiveElement(): Element | null {
+  let active = document.activeElement;
+  while (active?.shadowRoot?.activeElement) {
+    active = active.shadowRoot.activeElement;
+  }
+  return active;
+}
+
+// Find element at point - pierces through shadow DOM
+function getDeepElementFromPoint(x: number, y: number): Element | null {
+  let element = document.elementFromPoint(x, y);
+  while (element?.shadowRoot) {
+    const shadowElement = element.shadowRoot.elementFromPoint(x, y);
+    if (!shadowElement || shadowElement === element) break;
+    element = shadowElement;
+  }
+  return element;
+}
+
 // Listen for messages from background script
 chrome.runtime.onMessage.addListener(
   (
@@ -608,8 +628,11 @@ async function performType(
   params: BrowserActionParams
 ): Promise<ContentScriptResponse> {
   const element = findElement(params);
-  const activeEl = document.activeElement as HTMLElement;
+  // Use deep active element to pierce shadow DOM
+  const activeEl = getDeepActiveElement() as HTMLElement;
   const targetEl = element || activeEl;
+
+  console.log('[ContentScript] performType: element=', element?.tagName, 'activeEl=', activeEl?.tagName, 'isContentEditable=', (targetEl as HTMLElement)?.isContentEditable);
 
   if (!targetEl) {
     return { success: false, error: 'No element found or focused' };

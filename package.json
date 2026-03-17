@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite build --watch",
+    "dev:local": "vite build --watch --mode localdev",
     "build": "vite build",
+    "build:local": "vite build --mode localdev",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

@@ -355,6 +355,7 @@ class PatternCacheManager {
    */
   async getConsent(domain: string): Promise<ConsentPreference | null> {
     await this.init();
+    console.log(`[PatternCache] getConsent for ${domain}, total stored: ${this.cache!.consents.length}`, this.cache!.consents);
 
     const consent = this.cache!.consents.find(c => c.domain === domain);
 
@@ -373,6 +374,7 @@ class PatternCacheManager {
    * Set consent preference for domain
    */
   async setConsent(consent: ConsentPreference): Promise<void> {
+    console.log(`[PatternCache] setConsent:`, consent);
     await this.init();
 
     const existingIndex = this.cache!.consents.findIndex(c => c.domain === consent.domain);
@@ -384,6 +386,7 @@ class PatternCacheManager {
     }
 
     await this.save();
+    console.log(`[PatternCache] Consent saved, total consents: ${this.cache!.consents.length}`);
   }
 
   /**

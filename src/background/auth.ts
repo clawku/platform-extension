@@ -1,8 +1,8 @@
 import type { ExtensionStorage, ConnectionStatus } from '../types/messages.js';
 import { ensureSigningKey, clearSigningKeys } from './crypto.js';
 
-const DEFAULT_API_URL = 'https://b.api.clawku.id';
-const DEFAULT_WS_URL = 'wss://b.api.clawku.id';
+const DEFAULT_API_URL = 'https://api.b.clawku.id';
+const DEFAULT_WS_URL = 'wss://api.b.clawku.id';
 
 export async function pair(
   code: string,

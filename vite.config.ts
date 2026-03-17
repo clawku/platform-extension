@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'path';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   build: {
     outDir: 'dist',
     emptyDirFirst: true,
@@ -25,4 +25,4 @@ export default defineConfig({
     sourcemap: true,
   },
   publicDir: 'public',
-});
+}));
